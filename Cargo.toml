@@ -1,0 +1,25 @@
+[package]
+name = "egui-example"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+egui = "0.23.0"
+egui-wgpu = "0.23.0"
+egui-winit = "0.23.0"
+env_logger = "0.10.0"
+pollster = "0.3.0"
+raw-window-handle = "0.5.0"
+winit = "0.28.7"
+
+# wgpu 17 does not reexport naga.
+wgpu = { version = "0.17.1", features = [ "glsl", "naga" ] }
+# It uses naga 13.
+naga = "0.13.0"
+
+# Buffer management.
+nrbf-rs = { path = "../nrbf-rs", version = "0.1.0" }
+bytemuck = "1.14.0"
+image = "0.24.7"
