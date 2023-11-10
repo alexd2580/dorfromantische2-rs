@@ -1,4 +1,4 @@
-use glam::IVec2;
+use glam::{IVec2, UVec2, Vec2};
 use gpu_data::Tile;
 use std::{
     borrow::Cow,
@@ -790,12 +790,13 @@ struct App {
     game_data: GameData,
     graphics_resources: GraphicsResources,
 
-    mouse_position: (f32, f32),
+    mouse_position: Vec2,
     grab_move: bool,
     grab_rotate: bool,
 
-    size: (u32, u32),
-    origin: (f32, f32),
+    size: UVec2,
+    aspect_ratio: f32,
+    origin: Vec2,
     rotation: f32,
     inv_scale: f32,
     coloring: i32,
@@ -811,18 +812,16 @@ impl App {
         let game_data = GameData::default();
         let graphics_resources = GraphicsResources::new(graphics_device, &game_data);
 
-        let size = window.inner_size();
-        let size = (size.width, size.height);
-
-        let app = Self {
+        let mut app = Self {
             program_start: SystemTime::now(),
             game_data,
             graphics_resources,
-            mouse_position: (0.0, 0.0),
+            mouse_position: Vec2::ZERO,
             grab_move: false,
             grab_rotate: false,
-            size,
-            origin: (0.0, 0.0),
+            size: UVec2::ZERO,
+            aspect_ratio: 0.0,
+            origin: Vec2::ZERO,
             rotation: 0.0,
             inv_scale: 20.0,
             coloring: 0,
@@ -830,6 +829,8 @@ impl App {
             file_choose_dialog: None,
         };
 
+        let size = window.inner_size();
+        app.resize(UVec2::new(size.width, size.height));
         app.write_tiles(graphics_device);
         app
     }
@@ -849,27 +850,24 @@ impl App {
         Some(&self.graphics_resources.bind_groups)
     }
 
-    fn resize(&mut self, width: u32, height: u32) {
-        self.size = (width, height);
+    fn resize(&mut self, size: UVec2) {
+        self.size = size;
+        let fsize = size.as_vec2();
+        self.aspect_ratio = fsize.x / fsize.y;
     }
 
-    fn on_cursor_move(&mut self, x: f32, y: f32) {
-        let dx = (x - self.mouse_position.0) / self.size.0 as f32;
-        let dy = (y - self.mouse_position.1) / self.size.1 as f32;
+    fn on_cursor_move(&mut self, pos: Vec2) {
+        let delta = (pos - self.mouse_position) / self.size.as_vec2();
 
         if self.grab_move {
-            let aspect_ratio = self.size.0 as f32 / self.size.1 as f32;
-            self.origin = (
-                self.origin.0 - dx * aspect_ratio * self.inv_scale,
-                self.origin.1 + dy * self.inv_scale,
-            );
+            self.origin += Vec2::new(-1.0 * self.aspect_ratio, 1.0) * delta * self.inv_scale;
         }
 
         if self.grab_rotate {
-            self.rotation += dx;
+            self.rotation += delta.x;
         }
 
-        self.mouse_position = (x, y);
+        self.mouse_position = pos;
     }
 
     fn on_scroll(&mut self, y: f32) {
@@ -886,11 +884,11 @@ impl App {
         unsafe {
             let ptr = buffer_view.as_mut_ptr();
             let uptr = ptr.cast::<u32>();
-            *uptr.add(0) = self.size.0;
-            *uptr.add(1) = self.size.1;
+            *uptr.add(0) = self.size.x;
+            *uptr.add(1) = self.size.y;
             let fptr = uptr.add(2).cast::<f32>();
-            *fptr.add(0) = self.origin.0;
-            *fptr.add(1) = self.origin.1;
+            *fptr.add(0) = self.origin.x;
+            *fptr.add(1) = self.origin.y;
             *fptr.add(2) = self.rotation;
             *fptr.add(3) = self.inv_scale;
             *fptr.add(4) = self.elapsed_secs();
@@ -1040,7 +1038,7 @@ fn run(
                     WindowEvent::CursorMoved {
                         position: PhysicalPosition { x, y },
                         ..
-                    } => app.on_cursor_move(x as f32, y as f32),
+                    } => app.on_cursor_move(Vec2::new(x as f32, y as f32)),
                     WindowEvent::MouseWheel {
                         delta: MouseScrollDelta::LineDelta(_, y),
                         ..
@@ -1052,7 +1050,7 @@ fn run(
                         // Window has been resized. Adjust render pipeline settings.
                         graphics.resize(size.width, size.height);
                         ui.resize(size.width, size.height);
-                        app.resize(size.width, size.height);
+                        app.resize(UVec2::new(size.width, size.height));
 
                         // On macos the window needs to be redrawn manually after resizing
                         window.request_redraw();
