@@ -983,6 +983,10 @@ fn run(
                     egui::TopBottomPanel::top("top_panel").show(&ctx, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Dorfromantik viewer");
+                            if ui.button("Load file").clicked() {
+                                let files = rfd::FileDialog::new().set_directory(".").pick_file();
+                                dbg!(files);
+                            }
                             ui.toggle_value(&mut sidebar_expanded, "Visual settings");
                         });
                     });
@@ -1001,9 +1005,9 @@ fn run(
                             ui.selectable_value(&mut app.coloring, 3, "Color by texture");
                         },
                     );
-                    egui::Window::new("Select file").show(&ctx, |ui| {
-                        ui.label("Select file");
-                    });
+                    // egui::Window::new("Select file").show(&ctx, |ui| {
+                    //     ui.label("Select file");
+                    // });
                 });
 
                 // let egui_paint_jobs = ui.context.tessellate(full_output.shapes);
@@ -1016,6 +1020,8 @@ fn run(
 }
 
 fn main() {
+    env_logger::init();
+
     let event_loop = EventLoop::new();
     let window = winit::window::Window::new(&event_loop).unwrap();
     let graphics_device = pollster::block_on(GraphicsDevice::new(&window));
@@ -1023,26 +1029,5 @@ fn main() {
     let graphics = Graphics::new(&window, graphics_device, app.bind_group_layouts());
     let ui = Ui::new(&window);
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        env_logger::init();
-        run(event_loop, window, graphics, ui, app);
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        // TODO
-        std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-        console_log::init().expect("could not initialize logger");
-        use winit::platform::web::WindowExtWebSys;
-        // On wasm, append the canvas to the document body
-        web_sys::window()
-            .and_then(|win| win.document())
-            .and_then(|doc| doc.body())
-            .and_then(|body| {
-                body.append_child(&web_sys::Element::from(window.canvas()))
-                    .ok()
-            })
-            .expect("couldn't append canvas to document body");
-        wasm_bindgen_futures::spawn_local(run(event_loop, window));
-    }
+    run(event_loop, window, graphics, ui, app);
 }
