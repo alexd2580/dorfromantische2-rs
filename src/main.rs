@@ -1,4 +1,5 @@
-use gpu_data::{IVec2, Tile};
+use glam::IVec2;
+use gpu_data::Tile;
 use std::{
     borrow::Cow,
     collections::{HashSet, VecDeque},
@@ -388,12 +389,12 @@ impl GameData {
     /// Compute the position of tile at `pos` in the index structure.
     fn index_position_of(&self, pos: IVec2) -> Option<usize> {
         let valid_s =
-            pos.s >= self.index_offset.s && pos.s < self.index_offset.s + self.index_size.s;
+            pos.x >= self.index_offset.x && pos.x < self.index_offset.x + self.index_size.x;
         let valid_t =
-            pos.t >= self.index_offset.t && pos.t < self.index_offset.t + self.index_size.t;
+            pos.y >= self.index_offset.y && pos.y < self.index_offset.y + self.index_size.y;
         (valid_s && valid_t).then(|| {
             usize::try_from(
-                (pos.t - self.index_offset.t) * self.index_size.s + (pos.s - self.index_offset.s),
+                (pos.y - self.index_offset.y) * self.index_size.x + (pos.x - self.index_offset.x),
             )
             .unwrap()
         })
@@ -408,15 +409,15 @@ impl GameData {
             ),
             |(min, max), tile| {
                 (
-                    IVec2::new(min.s.min(tile.pos.s), min.t.min(tile.pos.t)),
-                    IVec2::new(max.s.max(tile.pos.s), max.t.max(tile.pos.t)),
+                    IVec2::new(min.x.min(tile.pos.x), min.y.min(tile.pos.y)),
+                    IVec2::new(max.x.max(tile.pos.x), max.y.max(tile.pos.y)),
                 )
             },
         );
 
         self.index_offset = min;
         self.index_size = max - min + IVec2::new(1, 1);
-        let mut index = vec![None; usize::try_from(self.index_size.s * self.index_size.t).unwrap()];
+        let mut index = vec![None; usize::try_from(self.index_size.x * self.index_size.y).unwrap()];
 
         self.tiles
             .iter()
@@ -912,10 +913,10 @@ impl App {
         unsafe {
             let ptr = buffer_view.as_mut_ptr();
             let iptr = ptr.cast::<i32>();
-            *iptr.add(0) = self.game_data.index_offset.s;
-            *iptr.add(1) = self.game_data.index_offset.t;
-            *iptr.add(2) = self.game_data.index_size.s;
-            *iptr.add(3) = self.game_data.index_size.t;
+            *iptr.add(0) = self.game_data.index_offset.x;
+            *iptr.add(1) = self.game_data.index_offset.y;
+            *iptr.add(2) = self.game_data.index_size.x;
+            *iptr.add(3) = self.game_data.index_size.y;
             let bptr = iptr.add(4).cast::<u8>();
 
             for (index, tile) in self.game_data.index.iter().enumerate() {

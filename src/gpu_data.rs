@@ -1,3 +1,5 @@
+use glam::IVec2;
+
 use crate::data;
 
 pub const _PAD_: usize = 4;
@@ -11,51 +13,6 @@ pub const IVEC4_: usize = 4 * INT_;
 
 // pub const TILE_: usize = BOOL_ + INT_ + 18 * INT_ + 4 * INT_;
 pub const TILE_: usize = 1 * IVEC4_ + 6 * IVEC4_;
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Vec2<T> {
-    pub s: T,
-    pub t: T,
-}
-
-impl<T: Default> Default for Vec2<T> {
-    fn default() -> Self {
-        Self {
-            s: Default::default(),
-            t: Default::default(),
-        }
-    }
-}
-
-impl<T: std::ops::Add<Output = T>> std::ops::Add for Vec2<T> {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self {
-        Self {
-            s: self.s + other.s,
-            t: self.t + other.t,
-        }
-    }
-}
-
-impl<T: std::ops::Sub<Output = T>> std::ops::Sub for Vec2<T> {
-    type Output = Self;
-
-    fn sub(self, other: Self) -> Self {
-        Self {
-            s: self.s - other.s,
-            t: self.t - other.t,
-        }
-    }
-}
-
-impl<T> Vec2<T> {
-    pub fn new(s: T, t: T) -> Self {
-        Self { s, t }
-    }
-}
-
-pub type IVec2 = Vec2<i32>;
 
 #[derive(Clone, Copy)]
 pub enum Form {
@@ -193,10 +150,7 @@ impl From<&data::Tile> for Tile {
             .collect();
 
         Self {
-            pos: IVec2 {
-                s: value.s,
-                t: value.t,
-            },
+            pos: IVec2::new(value.s, value.t),
             special: value.special_tile_id.0,
             segments,
         }
@@ -205,7 +159,7 @@ impl From<&data::Tile> for Tile {
 
 impl Tile {
     pub fn neighbor_coordinates(&self, rotation: i32) -> IVec2 {
-        let s_even = self.pos.s % 2 == 0;
+        let s_even = self.pos.x % 2 == 0;
         let b_to_i = |b| if b { 1 } else { 0 };
         match rotation {
             0 => self.pos + IVec2::new(0, 1),
