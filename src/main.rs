@@ -1,7 +1,7 @@
-use gpu_data::Tile;
+use gpu_data::{IVec2, Tile};
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     fs::File,
     iter,
     time::SystemTime,
@@ -64,11 +64,12 @@ impl GraphicsDevice {
         }
     }
 
-    fn load_texture(&self, path: &str) -> wgpu::Texture {
-        let image = image::io::Reader::open(path).unwrap().decode().unwrap();
-        let image = image.to_rgba8();
+    fn upload_texture(
+        &self,
+        path: &str,
+        image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>,
+    ) -> wgpu::Texture {
         let dimensions = image.dimensions();
-
         let texture_size = wgpu::Extent3d {
             width: dimensions.0,
             height: dimensions.1,
@@ -256,7 +257,7 @@ impl Graphics {
 
     fn redraw(
         &mut self,
-        bind_groups: &[wgpu::BindGroup],
+        bind_groups: Option<&[wgpu::BindGroup]>,
         ui: &mut Ui,
         full_output: egui::FullOutput,
     ) {
@@ -328,12 +329,17 @@ impl Graphics {
                 })],
                 depth_stencil_attachment: None,
             });
-            render_pass.set_pipeline(&self.render_pipeline);
-            for (index, bind_group) in bind_groups.iter().enumerate() {
-                render_pass.set_bind_group(index.try_into().unwrap(), bind_group, &[]);
-            }
-            render_pass.draw(0..4, 0..1);
 
+            // Run shader.
+            if let Some(bind_groups) = bind_groups {
+                render_pass.set_pipeline(&self.render_pipeline);
+                for (index, bind_group) in bind_groups.iter().enumerate() {
+                    render_pass.set_bind_group(index.try_into().unwrap(), bind_group, &[]);
+                }
+                render_pass.draw(0..4, 0..1);
+            }
+
+            // Render GUI.
             self.egui_renderer
                 .render(&mut render_pass, &egui_paint_jobs, &ui.screen_descriptor);
         }
@@ -350,155 +356,260 @@ impl Graphics {
     }
 }
 
-struct App {
-    program_start: SystemTime,
-
+struct GameData {
     tiles: Vec<Tile>,
-    quadrants: [Vec<Option<usize>>; 4],
 
-    sizes_buffer: wgpu::Buffer,
-    quadrant_buffers: [wgpu::Buffer; 4],
+    index_offset: IVec2,
+    index_size: IVec2,
+    index: Vec<Option<usize>>,
+}
 
+impl Default for GameData {
+    fn default() -> Self {
+        let tiles = vec![Tile {
+            pos: Default::default(),
+            special: 0,
+            segments: vec![],
+        }];
+
+        let mut game_data = Self {
+            tiles,
+            index_offset: Default::default(),
+            index_size: Default::default(),
+            index: Default::default(),
+        };
+        game_data.recreate_index();
+        game_data
+    }
+}
+
+impl GameData {
+    /// Compute the position of tile at `pos` in the index structure.
+    fn index_position_of(&self, pos: IVec2) -> usize {
+        usize::try_from(
+            (pos.t - self.index_offset.t) * self.index_size.s + (pos.s - self.index_offset.s),
+        )
+        .unwrap()
+    }
+
+    /// Compute the 2D bounding box and traverse it row-first (in row-major) order.
+    fn recreate_index(&mut self) {
+        let (min, max) = self.tiles.iter().fold(
+            (
+                IVec2::new(i32::MAX, i32::MAX),
+                IVec2::new(i32::MIN, i32::MIN),
+            ),
+            |(min, max), tile| {
+                (
+                    IVec2::new(min.s.min(tile.pos.s), min.t.min(tile.pos.t)),
+                    IVec2::new(max.s.max(tile.pos.s), max.t.max(tile.pos.t)),
+                )
+            },
+        );
+
+        self.index_offset = min;
+        self.index_size = max - min + IVec2::new(1, 1);
+        let mut index = vec![None; usize::try_from(self.index_size.s * self.index_size.t).unwrap()];
+
+        self.tiles
+            .iter()
+            .enumerate()
+            .for_each(|(tile_index, tile)| {
+                index[self.index_position_of(tile.pos)] = Some(tile_index);
+            });
+
+        self.index = index;
+    }
+
+    /// Compute the position of tile at `pos` in the tiles' list.
+    fn tile_index(&self, pos: IVec2) -> Option<usize> {
+        self.index
+            .get(self.index_position_of(pos))
+            .cloned()
+            .flatten()
+    }
+
+    fn assign_groups(&mut self) {
+        // Assign groups.
+        let mut groups = Vec::<HashSet<(usize, usize)>>::from([Default::default()]);
+        let mut next_group_index = 1;
+        let mut processed = HashSet::<usize>::default();
+        let mut queue = VecDeque::from([0]);
+
+        let collect_connected_neighbor_group_ids = |tile: usize, segment: usize| {
+            let segment = &self.tiles[tile].segments[segment];
+            segment
+                .rotations()
+                .into_iter()
+                .flat_map(|rotation| {
+                    let neighbor_pos = self.tiles[tile].neighbor_coordinates(rotation);
+                    let opposite_side = (rotation + 3) % 6;
+
+                    // Get neighbor tile at `rotation`.
+                    self.tile_index(neighbor_pos)
+                        // Get its segment which is at the opposite side of `rotation`.
+                        .and_then(|neighbor| self.tiles[neighbor].segment_at(opposite_side))
+                        // Require that the terrain is the same.
+                        .filter(|neighbor_segment| neighbor_segment.terrain == segment.terrain)
+                        .into_iter()
+                        // Get the group id.
+                        .map(|neighbor_segment| neighbor_segment.group)
+                })
+                .collect::<HashSet<_>>()
+        };
+
+        // Process all tiles, breadth first.
+        while !queue.is_empty() {
+            let tile = queue.pop_front().unwrap();
+
+            // Check if an index was processed and enqueue neighbor otherwise.
+            for rotation in 0..6 {
+                let pos = self.tiles[tile].neighbor_coordinates(rotation);
+                if let Some(tile) = self.tile_index(pos) {
+                    if !processed.contains(&tile) {
+                        processed.insert(tile);
+                        queue.push_back(tile);
+                    }
+                }
+            }
+
+            // For each segment, aka each separate part of a tile...
+            (0..self.tiles[tile].segments.len())
+                .filter(|segment| self.tiles[tile].segments[*segment].group == 0)
+                .map(|segment| (segment, collect_connected_neighbor_group_ids(tile, segment)))
+                .for_each(|(segment, mut group_ids)| {
+                    // TODO why can this happen?
+                    group_ids.remove(&0);
+
+                    // Choose the new group id from the collected ids.
+                    let group_id = if group_ids.is_empty() {
+                        groups.push(Default::default());
+                        next_group_index += 1;
+                        next_group_index - 1
+                    } else if group_ids.len() == 1 {
+                        group_ids.drain().next().unwrap()
+                    } else {
+                        let min_id = group_ids.iter().fold(usize::max_value(), |a, b| a.min(*b));
+                        group_ids.remove(&min_id);
+                        min_id
+                    };
+
+                    // Register the current segment with `group_id`.
+                    let mut group = std::mem::take(&mut groups[group_id]);
+                    group.insert((tile, segment));
+                    // Remap all connected groups to the chosen one (TODO Expensive!).
+                    for other_id in group_ids.into_iter() {
+                        let drain = groups[other_id].drain();
+                        group.extend(drain);
+                    }
+                    groups[group_id] = group;
+                });
+        }
+
+        // Assign `group_id`s.
+        groups
+            .into_iter()
+            .enumerate()
+            .for_each(|(group_id, segments)| {
+                segments.into_iter().for_each(|(tile, segment)| {
+                    self.tiles[tile].segments[segment].group = group_id;
+                })
+            });
+    }
+
+    fn load_file(&mut self, path: &str) {
+        // Load savegame.
+        let mut stream = File::open(path).expect("Failed to open file");
+        let parsed = nrbf_rs::parse_nrbf(&mut stream);
+        let savegame = data::SaveGame::try_from(&parsed).unwrap();
+
+        // Prepend tiles list with empty tile (is this necessary when i start parsing special tiles?)
+        let empty_tile = Tile {
+            pos: IVec2::new(0, 0),
+            special: 0,
+            segments: vec![],
+        };
+        self.tiles = iter::once(empty_tile)
+            .chain(savegame.tiles.iter().map(Tile::from))
+            .collect::<Vec<_>>();
+
+        // Group into quadrants for indexing.
+        self.recreate_index();
+        self.assign_groups();
+    }
+}
+
+struct GraphicsResources {
+    // Textures.
+    _forest_texture: wgpu::Texture,
+    _city_texture: wgpu::Texture,
+    _wheat_texture: wgpu::Texture,
+    _water_texture: wgpu::Texture,
+
+    // Texture access.
+    _texture_sampler: wgpu::Sampler,
+
+    // Generic info (changes every frame).
     view_buffer_size: u64,
     view_buffer: wgpu::Buffer,
 
+    // Organized tiles list.
+    tiles_buffer_size: u64,
+    tiles_buffer: wgpu::Buffer,
+
     bind_group_layouts: Vec<wgpu::BindGroupLayout>,
     bind_groups: Vec<wgpu::BindGroup>,
-
-    mouse_position: (f32, f32),
-    grab_move: bool,
-    grab_rotate: bool,
-
-    size: (u32, u32),
-    origin: (f32, f32),
-    rotation: f32,
-    inv_scale: f32,
-
-    coloring: i32,
 }
 
-impl App {
-    fn assign_groups(tiles: &mut Vec<Tile>, quadrants: &[Vec<Option<usize>>; 4]) {
-        // Assign groups.
-        let mut groups = HashMap::<usize, HashSet<(i32, i32, usize)>>::default();
-        let mut next_group_index = 1;
-        let mut processed = HashSet::<(i32, i32)>::default();
-        let mut queue = VecDeque::from([(0, 0)]);
+enum SizeOrContent<'a> {
+    Size(u64),
+    _Content(&'a [u8]),
+}
 
-        let tile_index = |s, t| {
-            let quadrant = &quadrants[Tile::quadrant_of(s, t)];
-            let index = Tile::index_of(s, t);
-            if index < quadrant.len() {
-                quadrant[index]
-            } else {
-                None
+impl GraphicsResources {
+    fn load_texture(path: &str, graphics_device: &GraphicsDevice) -> wgpu::Texture {
+        let image = image::io::Reader::open(path).unwrap().decode().unwrap();
+        let image = image.to_rgba8();
+        graphics_device.upload_texture(path, image)
+    }
+
+    fn create_buffer(
+        label: &str,
+        usage: wgpu::BufferUsages,
+        size_or_content: SizeOrContent,
+        graphics_device: &GraphicsDevice,
+    ) -> wgpu::Buffer {
+        match size_or_content {
+            SizeOrContent::Size(size) => {
+                graphics_device
+                    .device
+                    .create_buffer(&wgpu::BufferDescriptor {
+                        label: Some(label),
+                        usage,
+                        size,
+                        mapped_at_creation: false,
+                    })
             }
-        };
-
-        while !queue.is_empty() {
-            let (s, t) = queue.pop_front().unwrap();
-            let tile = match tile_index(s, t) {
-                Some(tile) => tile,
-                None => {
-                    continue;
-                }
-            };
-
-            // Enqueue neighbors.
-            for rotation in 0..6 {
-                let (ns, nt) = tiles[tile].neighbor_coordinates(rotation);
-                if !processed.contains(&(ns, nt)) {
-                    processed.insert((ns, nt));
-                    queue.push_back((ns, nt));
-                }
-            }
-
-            // For each segment, aka each separate part of a tile.
-            for segment_index in 0..tiles[tile].segments.len() {
-                // Collect neighbor group ids.
-                let mut group_ids = HashSet::<usize>::default();
-                {
-                    let segment = &tiles[tile].segments[segment_index];
-                    if segment.group != 0 {
-                        continue;
-                    }
-
-                    for rotation in segment.rotations().into_iter() {
-                        let (ns, nt) = tiles[tile].neighbor_coordinates(rotation);
-                        let neighbor = match tile_index(ns, nt) {
-                            Some(tile) => tile,
-                            None => {
-                                continue;
-                            }
-                        };
-
-                        let opposite_side = (rotation + 3) % 6;
-                        let neighbor_segment = match tiles[neighbor].segment_at(opposite_side) {
-                            Some(segment) => segment,
-                            None => {
-                                continue;
-                            }
-                        };
-
-                        if neighbor_segment.terrain == segment.terrain {
-                            group_ids.insert(neighbor_segment.group);
-                        }
-                    }
-                }
-
-                // TODO why can this happen?
-                group_ids.remove(&0);
-
-                // Create, assign and merge.
-                if group_ids.is_empty() {
-                    tiles[tile].segments[segment_index].group = next_group_index;
-                    groups.insert(next_group_index, HashSet::from([(s, t, segment_index)]));
-                    next_group_index += 1;
-                } else if group_ids.len() == 1 {
-                    let id = group_ids.into_iter().next().unwrap();
-                    tiles[tile].segments[segment_index].group = id;
-                    groups.get_mut(&id).unwrap().insert((s, t, segment_index));
-                } else {
-                    let min_id = group_ids.iter().fold(usize::max_value(), |a, b| a.min(*b));
-                    tiles[tile].segments[segment_index].group = min_id;
-                    group_ids.remove(&min_id);
-                    groups
-                        .get_mut(&min_id)
-                        .unwrap()
-                        .insert((s, t, segment_index));
-
-                    for other_id in group_ids.into_iter() {
-                        for (other_s, other_t, other_index) in
-                            groups.remove(&other_id).unwrap().into_iter()
-                        {
-                            let other_tile = match tile_index(other_s, other_t) {
-                                Some(tile) => tile,
-                                None => {
-                                    continue;
-                                }
-                            };
-
-                            tiles[other_tile].segments[other_index].group = min_id;
-                            groups.get_mut(&min_id).unwrap().insert((
-                                other_s,
-                                other_t,
-                                other_index,
-                            ));
-                        }
-                    }
-                }
+            SizeOrContent::_Content(contents) => {
+                graphics_device
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some(label),
+                        usage,
+                        contents,
+                    })
             }
         }
     }
 
-    fn new(window: &Window, graphics_device: &GraphicsDevice) -> Self {
-        let forest_texture = graphics_device.load_texture("seamless-forest.jpg");
+    fn new(graphics_device: &GraphicsDevice, game_data: &GameData) -> Self {
+        let forest_texture = Self::load_texture("seamless-forest.jpg", graphics_device);
         let forest_view = forest_texture.create_view(&Default::default());
-        let city_texture = graphics_device.load_texture("seamless-city.jpg");
+        let city_texture = Self::load_texture("seamless-city.jpg", graphics_device);
         let city_view = city_texture.create_view(&Default::default());
-        let water_texture = graphics_device.load_texture("seamless-water.jpg");
+        let water_texture = Self::load_texture("seamless-water.jpg", graphics_device);
         let water_view = water_texture.create_view(&Default::default());
-        let wheat_texture = graphics_device.load_texture("seamless-wheat.jpg");
+        let wheat_texture = Self::load_texture("seamless-wheat.jpg", graphics_device);
         let wheat_view = wheat_texture.create_view(&Default::default());
 
         let texture_sampler = graphics_device
@@ -512,107 +623,7 @@ impl App {
                 ..Default::default()
             });
 
-        // Load savegame.
-        let mut stream = File::open("dorfromantik.dump").expect("Failed to open file");
-        // let mut stream = File::open("mini.sav").expect("Failed to open file");
-        let parsed = nrbf_rs::parse_nrbf(&mut stream);
-        let savegame = data::SaveGame::try_from(&parsed).unwrap();
-        let empty_tile = Tile {
-            s: 0,
-            t: 0,
-            special: 0,
-            segments: vec![],
-        };
-        let mut tiles = iter::once(empty_tile)
-            .chain(savegame.tiles.iter().map(Tile::from))
-            .collect::<Vec<_>>();
-
-        // Group into quadrants for indexing.
-        let mut quadrants = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
-        for (index, tile) in tiles.iter().enumerate() {
-            let quadrant = &mut quadrants[tile.quadrant()];
-            let t_index = tile.index();
-            if quadrant.len() < t_index + 1 {
-                quadrant.resize(t_index + 1, None);
-            }
-            quadrant[t_index] = Some(index);
-        }
-
-        Self::assign_groups(&mut tiles, &quadrants);
-
-        let quadrant_sizes = [0, 1, 2, 3].map(|i| u32::try_from(quadrants[i].len()).unwrap());
-
-        // Create sizes buffer with quadrant sizes.
-        let sizes_buffer =
-            graphics_device
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("sizes"),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    contents: bytemuck::cast_slice(&quadrant_sizes),
-                });
-
-        // Create quadrants themselves.
-        let create_quadrant_buffer = |index: usize, tile_count: u32| {
-            graphics_device
-                .device
-                .create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(&format!("quadrant_buffer_{index}")),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    size: (tile_count * u32::try_from(gpu_data::TILE_).unwrap()).into(),
-                    mapped_at_creation: false,
-                })
-        };
-        let quadrant_buffers = [
-            create_quadrant_buffer(0, quadrant_sizes[0]),
-            create_quadrant_buffer(1, quadrant_sizes[1]),
-            create_quadrant_buffer(2, quadrant_sizes[2]),
-            create_quadrant_buffer(3, quadrant_sizes[3]),
-        ];
-
-        for ((quadrant, &quadrant_size), buffer) in quadrants
-            .iter()
-            .zip(quadrant_sizes.iter())
-            .zip(quadrant_buffers.iter())
-        {
-            let buffer_size = u64::from(quadrant_size) * u64::try_from(gpu_data::TILE_).unwrap();
-            let mut buffer_view = graphics_device
-                .queue
-                .write_buffer_with(buffer, 0, buffer_size.try_into().unwrap())
-                .expect("Failed to create buffer view");
-
-            unsafe {
-                let ptr = buffer_view.as_mut_ptr();
-                for (index, tile) in quadrant.iter().enumerate() {
-                    let tile_ptr = ptr.add(index * gpu_data::TILE_).cast::<i32>();
-
-                    if let Some(tile_index) = tile {
-                        let tile = &tiles[*tile_index];
-                        *tile_ptr = 1;
-                        *tile_ptr.add(1) = tile.special;
-
-                        let segments_ptr = tile_ptr.add(4);
-                        for (index, segment) in tile.segments.iter().enumerate() {
-                            let segment_ptr = segments_ptr.add(index * 4);
-                            *segment_ptr.add(0) = segment.terrain as i32;
-                            *segment_ptr.add(1) = segment.form as i32;
-                            *segment_ptr.add(2) = segment.rotation;
-                            *segment_ptr.add(3) = segment.group as i32;
-                        }
-                        for index in tile.segments.len()..6 {
-                            let segment_ptr = segments_ptr.add(index * 4);
-                            // Mark empty.
-                            *segment_ptr.add(0) = 0;
-                        }
-                    } else {
-                        *tile_ptr = 0;
-                    }
-                }
-            }
-        }
-
-        // Create view buffer.
-        let view_buffer_size = (
+        let view_buffer_size = u64::try_from(
             // Size
             1 * gpu_data::IVEC2_
             // Origin
@@ -624,28 +635,32 @@ impl App {
             // Time
             + 1 * gpu_data::FLOAT_
             // Color bu group
-            + 1 * gpu_data::BOOL_
+            + 1 * gpu_data::BOOL_,
         )
-            .try_into()
-            .unwrap();
-        let view_buffer = graphics_device
-            .device
-            .create_buffer(&wgpu::BufferDescriptor {
-                label: Some("view"),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                size: view_buffer_size,
-                mapped_at_creation: false,
-            });
+        .unwrap();
+        let view_buffer = Self::create_buffer(
+            "view",
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            SizeOrContent::Size(view_buffer_size),
+            graphics_device,
+        );
 
-        // Create bind group layout.
-        let layout_entry = |binding, stage, binding_type| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: stage,
-            ty: binding_type,
-            count: None,
-        };
+        let tiles_buffer_size = u64::try_from(
+            // Offset
+            1 * gpu_data::IVEC2_
+            // Size
+            + 1 * gpu_data::IVEC2_
+            // Tiles (at least one...)
+            + game_data.index.len().max(1) * gpu_data::TILE_,
+        )
+        .unwrap();
+        let tiles_buffer = Self::create_buffer(
+            "tiles",
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            SizeOrContent::Size(tiles_buffer_size),
+            graphics_device,
+        );
 
-        let fragment = wgpu::ShaderStages::FRAGMENT;
         let uniform_type = wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: false,
@@ -664,18 +679,20 @@ impl App {
         };
 
         let bind_group_layout_entries = [
-            layout_entry(0, fragment, uniform_type),
-            layout_entry(1, fragment, storage_type),
-            layout_entry(2, fragment, storage_type),
-            layout_entry(3, fragment, storage_type),
-            layout_entry(4, fragment, storage_type),
-            layout_entry(5, fragment, uniform_type),
-            layout_entry(6, fragment, sampler_type),
-            layout_entry(7, fragment, texture_type),
-            layout_entry(8, fragment, texture_type),
-            layout_entry(9, fragment, texture_type),
-            layout_entry(10, fragment, texture_type),
-        ];
+            (0, uniform_type),
+            (1, storage_type),
+            (2, sampler_type),
+            (3, texture_type),
+            (4, texture_type),
+            (5, texture_type),
+            (6, texture_type),
+        ]
+        .map(|(binding, ty)| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty,
+            count: None,
+        });
         let bind_group_layout =
             graphics_device
                 .device
@@ -686,26 +703,15 @@ impl App {
 
         // Create actual bind group.
         let bind_group_entries = [
-            sizes_buffer.as_entire_binding(),
-            quadrant_buffers[0].as_entire_binding(),
-            quadrant_buffers[1].as_entire_binding(),
-            quadrant_buffers[2].as_entire_binding(),
-            quadrant_buffers[3].as_entire_binding(),
-            view_buffer.as_entire_binding(),
-            wgpu::BindingResource::Sampler(&texture_sampler),
-            wgpu::BindingResource::TextureView(&forest_view),
-            wgpu::BindingResource::TextureView(&city_view),
-            wgpu::BindingResource::TextureView(&wheat_view),
-            wgpu::BindingResource::TextureView(&water_view),
+            (0, view_buffer.as_entire_binding()),
+            (1, tiles_buffer.as_entire_binding()),
+            (2, wgpu::BindingResource::Sampler(&texture_sampler)),
+            (3, wgpu::BindingResource::TextureView(&forest_view)),
+            (4, wgpu::BindingResource::TextureView(&city_view)),
+            (5, wgpu::BindingResource::TextureView(&wheat_view)),
+            (6, wgpu::BindingResource::TextureView(&water_view)),
         ]
-        .into_iter()
-        .enumerate()
-        .map(|(index, resource)| wgpu::BindGroupEntry {
-            binding: index as u32,
-            resource,
-        })
-        .collect::<Vec<_>>();
-
+        .map(|(binding, resource)| wgpu::BindGroupEntry { binding, resource });
         let bind_group = graphics_device
             .device
             .create_bind_group(&wgpu::BindGroupDescriptor {
@@ -714,19 +720,54 @@ impl App {
                 label: Some("bind_group"),
             });
 
+        Self {
+            _forest_texture: forest_texture,
+            _city_texture: city_texture,
+            _wheat_texture: wheat_texture,
+            _water_texture: water_texture,
+            _texture_sampler: texture_sampler,
+            view_buffer_size,
+            view_buffer,
+            tiles_buffer_size,
+            tiles_buffer,
+            bind_group_layouts: vec![bind_group_layout],
+            bind_groups: vec![bind_group],
+        }
+    }
+}
+
+struct App {
+    program_start: SystemTime,
+
+    game_data: GameData,
+    graphics_resources: GraphicsResources,
+
+    mouse_position: (f32, f32),
+    grab_move: bool,
+    grab_rotate: bool,
+
+    size: (u32, u32),
+    origin: (f32, f32),
+    rotation: f32,
+    inv_scale: f32,
+
+    coloring: i32,
+}
+
+impl App {
+    fn new(window: &Window, graphics_device: &GraphicsDevice) -> Self {
+        // Load data
+        // "dorfromantik.dump"
+        let game_data = GameData::default();
+        let graphics_resources = GraphicsResources::new(graphics_device, &game_data);
+
         let size = window.inner_size();
         let size = (size.width, size.height);
 
-        Self {
+        let app = Self {
             program_start: SystemTime::now(),
-            tiles,
-            quadrants,
-            sizes_buffer,
-            quadrant_buffers,
-            view_buffer_size,
-            view_buffer,
-            bind_group_layouts: vec![bind_group_layout],
-            bind_groups: vec![bind_group],
+            game_data,
+            graphics_resources,
             mouse_position: (0.0, 0.0),
             grab_move: false,
             grab_rotate: false,
@@ -735,7 +776,10 @@ impl App {
             rotation: 0.0,
             inv_scale: 20.0,
             coloring: 0,
-        }
+        };
+
+        app.write_tiles(graphics_device);
+        app
     }
 
     fn elapsed_secs(&self) -> f32 {
@@ -746,11 +790,11 @@ impl App {
     }
 
     fn bind_group_layouts(&self) -> &[wgpu::BindGroupLayout] {
-        &self.bind_group_layouts
+        &self.graphics_resources.bind_group_layouts
     }
 
-    fn bind_groups(&self) -> &[wgpu::BindGroup] {
-        &self.bind_groups
+    fn bind_groups(&self) -> Option<&[wgpu::BindGroup]> {
+        Some(&self.graphics_resources.bind_groups)
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -758,10 +802,10 @@ impl App {
     }
 
     fn write_view(&self, graphics_device: &GraphicsDevice) {
-        let view_buffer_size = self.view_buffer_size.try_into().unwrap();
+        let view_buffer_size = self.graphics_resources.view_buffer_size.try_into().unwrap();
         let mut buffer_view = graphics_device
             .queue
-            .write_buffer_with(&self.view_buffer, 0, view_buffer_size)
+            .write_buffer_with(&self.graphics_resources.view_buffer, 0, view_buffer_size)
             .expect("Failed to create buffer view");
 
         unsafe {
@@ -777,6 +821,53 @@ impl App {
             *fptr.add(4) = self.elapsed_secs();
             let iptr = fptr.add(5).cast::<i32>();
             *iptr.add(0) = self.coloring;
+        }
+    }
+
+    fn write_tiles(&self, graphics_device: &GraphicsDevice) {
+        let view_buffer_size = self
+            .graphics_resources
+            .tiles_buffer_size
+            .try_into()
+            .unwrap();
+        let mut buffer_view = graphics_device
+            .queue
+            .write_buffer_with(&self.graphics_resources.tiles_buffer, 0, view_buffer_size)
+            .expect("Failed to create buffer view");
+
+        unsafe {
+            let ptr = buffer_view.as_mut_ptr();
+            let iptr = ptr.cast::<i32>();
+            *iptr.add(0) = self.game_data.index_offset.s;
+            *iptr.add(1) = self.game_data.index_offset.t;
+            *iptr.add(2) = self.game_data.index_size.s;
+            *iptr.add(3) = self.game_data.index_size.t;
+            let bptr = iptr.add(4).cast::<u8>();
+
+            for (index, tile) in self.game_data.index.iter().enumerate() {
+                let tptr = bptr.add(index * gpu_data::TILE_).cast::<i32>();
+
+                if let Some(index) = tile {
+                    let tile = &self.game_data.tiles[*index];
+                    *tptr = 1;
+                    *tptr.add(1) = tile.special;
+
+                    let mut sptr = tptr.add(4);
+                    for segment in tile.segments.iter() {
+                        *sptr.add(0) = segment.terrain as i32;
+                        *sptr.add(1) = segment.form as i32;
+                        *sptr.add(2) = segment.rotation;
+                        *sptr.add(3) = segment.group as i32;
+                        sptr = sptr.add(4);
+                    }
+                    for _ in tile.segments.len()..6 {
+                        *sptr.add(0) = 0;
+                        sptr = sptr.add(4);
+                    }
+                } else {
+                    *tptr = 0;
+                }
+            }
         }
     }
 }
@@ -929,7 +1020,6 @@ fn main() {
     let window = winit::window::Window::new(&event_loop).unwrap();
     let graphics_device = pollster::block_on(GraphicsDevice::new(&window));
     let app = App::new(&window, &graphics_device);
-
     let graphics = Graphics::new(&window, graphics_device, app.bind_group_layouts());
     let ui = Ui::new(&window);
 

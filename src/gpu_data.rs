@@ -1,16 +1,61 @@
 use crate::data;
 
-pub const PAD_: usize = 4;
+pub const _PAD_: usize = 4;
 pub const BOOL_: usize = 4;
 pub const INT_: usize = 4;
 pub const FLOAT_: usize = 4;
 pub const VEC2_: usize = 2 * FLOAT_;
-pub const VEC3_: usize = 3 * FLOAT_ + PAD_;
+pub const _VEC3_: usize = 3 * FLOAT_ + _PAD_;
 pub const IVEC2_: usize = 2 * INT_;
 pub const IVEC4_: usize = 4 * INT_;
 
 // pub const TILE_: usize = BOOL_ + INT_ + 18 * INT_ + 4 * INT_;
 pub const TILE_: usize = 1 * IVEC4_ + 6 * IVEC4_;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Vec2<T> {
+    pub s: T,
+    pub t: T,
+}
+
+impl<T: Default> Default for Vec2<T> {
+    fn default() -> Self {
+        Self {
+            s: Default::default(),
+            t: Default::default(),
+        }
+    }
+}
+
+impl<T: std::ops::Add<Output = T>> std::ops::Add for Vec2<T> {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            s: self.s + other.s,
+            t: self.t + other.t,
+        }
+    }
+}
+
+impl<T: std::ops::Sub<Output = T>> std::ops::Sub for Vec2<T> {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self {
+        Self {
+            s: self.s - other.s,
+            t: self.t - other.t,
+        }
+    }
+}
+
+impl<T> Vec2<T> {
+    pub fn new(s: T, t: T) -> Self {
+        Self { s, t }
+    }
+}
+
+pub type IVec2 = Vec2<i32>;
 
 #[derive(Clone, Copy)]
 pub enum Form {
@@ -130,8 +175,7 @@ impl Segment {
 }
 
 pub struct Tile {
-    pub s: i32,
-    pub t: i32,
+    pub pos: IVec2,
     pub special: i32,
     pub segments: Vec<Segment>,
 }
@@ -149,8 +193,10 @@ impl From<&data::Tile> for Tile {
             .collect();
 
         Self {
-            s: value.s,
-            t: value.t,
+            pos: IVec2 {
+                s: value.s,
+                t: value.t,
+            },
             special: value.special_tile_id.0,
             segments,
         }
@@ -158,39 +204,16 @@ impl From<&data::Tile> for Tile {
 }
 
 impl Tile {
-    pub fn quadrant_of(s: i32, t: i32) -> usize {
-        match (s >= 0, t >= 0) {
-            (true, true) => 0,
-            (false, true) => 1,
-            (false, false) => 2,
-            (true, false) => 3,
-        }
-    }
-
-    pub fn quadrant(&self) -> usize {
-        Tile::quadrant_of(self.s, self.t)
-    }
-
-    pub fn index_of(s: i32, t: i32) -> usize {
-        let s_ = if s >= 0 { s } else { -1 - s };
-        let t_ = if t >= 0 { t } else { -1 - t };
-        let st = s_ + t_;
-        (((st + 1) * st / 2) + t_).try_into().unwrap()
-    }
-
-    pub fn index(&self) -> usize {
-        Tile::index_of(self.s, self.t)
-    }
-
-    pub fn neighbor_coordinates(&self, rotation: i32) -> (i32, i32) {
-        let s_even = self.s % 2 == 0;
+    pub fn neighbor_coordinates(&self, rotation: i32) -> IVec2 {
+        let s_even = self.pos.s % 2 == 0;
+        let b_to_i = |b| if b { 1 } else { 0 };
         match rotation {
-            0 => (self.s, self.t + 1),
-            3 => (self.s, self.t - 1),
-            1 => (self.s + 1, self.t + if s_even { 1 } else { 0 }),
-            2 => (self.s + 1, self.t - if s_even { 0 } else { 1 }),
-            4 => (self.s - 1, self.t - if s_even { 0 } else { 1 }),
-            5 => (self.s - 1, self.t + if s_even { 1 } else { 0 }),
+            0 => self.pos + IVec2::new(0, 1),
+            3 => self.pos + IVec2::new(0, -1),
+            1 => self.pos + IVec2::new(1, b_to_i(s_even)),
+            2 => self.pos + IVec2::new(1, -b_to_i(!s_even)),
+            4 => self.pos + IVec2::new(-1, -b_to_i(!s_even)),
+            5 => self.pos + IVec2::new(-1, b_to_i(s_even)),
             _ => panic!("Rotation should be 0-5, got {rotation}"),
         }
     }

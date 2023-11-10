@@ -73,27 +73,7 @@ layout(location=0) out vec4 frag_data;
 //   layout(offset=0) float time;
 // };
 
-layout(std140, binding=0) uniform Sizes {
-    ivec4 quadrant_sizes;
-};
-
-layout(std140, binding=1) readonly buffer Quadrant0Buffer {
-    Tile quadrant0[];
-};
-
-layout(std140, binding=2) readonly buffer Quadrant1Buffer {
-    Tile quadrant1[];
-};
-
-layout(std140, binding=3) readonly buffer Quadrant2Buffer {
-    Tile quadrant2[];
-};
-
-layout(std140, binding=4) readonly buffer Quadrant3Buffer {
-    Tile quadrant3[];
-};
-
-layout(std140, binding=5) uniform View {
+layout(std140, binding=0) uniform View {
     ivec2 size;
     vec2 origin;
     float rotation;
@@ -102,11 +82,17 @@ layout(std140, binding=5) uniform View {
     int coloring;
 };
 
-layout(binding=6) uniform sampler texture_sampler;
-layout(binding=7) uniform texture2D forest_texture;
-layout(binding=8) uniform texture2D city_texture;
-layout(binding=9) uniform texture2D wheat_texture;
-layout(binding=10) uniform texture2D water_texture;
+layout(std140, binding=1) readonly buffer Tiles {
+    ivec2 index_offset;
+    ivec2 index_size;
+    Tile tiles[];
+};
+
+layout(binding=2) uniform sampler texture_sampler;
+layout(binding=3) uniform texture2D forest_texture;
+layout(binding=4) uniform texture2D city_texture;
+layout(binding=5) uniform texture2D wheat_texture;
+layout(binding=6) uniform texture2D water_texture;
 
 const float pi = 3.141592653589793;
 
@@ -158,35 +144,14 @@ ivec2 grid_coords_at(vec2 pos) {
     );
 }
 
-ivec2 tile_indices(ivec2 st) {
-    int quadrant = st.s >= 0 ? (st.t >= 0 ? 0 : 3) : (st.t >= 0 ? 1 : 2);
-    int _s = st.s >= 0 ? st.s : (-1 - st.s);
-    int _t = st.t >= 0 ? st.t : (-1 - st.t);
-
-    int index = int((_s + _t + 1) * (_s + _t) / 2.0) + _t;
-
-    if (quadrant == 0 && index < quadrant_sizes.x) {
-        return ivec2(0, index);
-    } else if (quadrant == 1 && index < quadrant_sizes.y) {
-        return ivec2(1, index);
-    } else if (quadrant == 2 && index < quadrant_sizes.z) {
-        return ivec2(2, index);
-    } else if (quadrant == 3 && index < quadrant_sizes.w) {
-        return ivec2(3, index);
+int tile_index(ivec2 st) {
+    bool violates_s = st.s < index_offset.s || st.s > index_offset.s + index_size.s;
+    bool violates_t = st.t < index_offset.t || st.t > index_offset.t + index_size.t;
+    if (violates_s || violates_t) {
+        return -1;
     }
-    return ivec2(-1, -1);
-}
 
-Tile get_tile(ivec2 indices) {
-    if (indices.s == 0) {
-        return quadrant0[indices.t];
-    } else if (indices.s == 1) {
-        return quadrant1[indices.t];
-    } else if (indices.s == 2) {
-        return quadrant2[indices.t];
-    } else { // if (indices.s == 3) {
-        return quadrant3[indices.t];
-    }
+    return (st.t - index_offset.t) * index_size.s + (st.s - index_offset.s);
 }
 
 vec3 color_of_group(int group, float offset) {
@@ -304,14 +269,14 @@ void main() {
     ivec2 st = grid_coords_at(coords);
 
     // Load tile info.
-    ivec2 indices = tile_indices(st);
+    int index = tile_index(st);
     // Tile index is outside range. It's empty there.
-    if (indices.s == -1) {
+    if (index == -1) {
         frag_data = vec4(0, 0, 0, 1);
         return;
     }
 
-    Tile tile = get_tile(indices);
+    Tile tile = tiles[index];
     // Tile is not really present, just placeholder.
     if (tile.header.x == 0) {
         frag_data = vec4(0, 0, 0, 1);

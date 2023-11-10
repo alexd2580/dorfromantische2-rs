@@ -448,6 +448,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "dorfromantische2-rs"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
+ "env_logger",
+ "image",
+ "naga",
+ "nrbf-rs",
+ "pollster",
+ "raw-window-handle",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "downcast-rs"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -472,24 +490,6 @@ dependencies = [
  "epaint",
  "log",
  "nohash-hasher",
-]
-
-[[package]]
-name = "egui-example"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "egui",
- "egui-wgpu",
- "egui-winit",
- "env_logger",
- "image",
- "naga",
- "nrbf-rs",
- "pollster",
- "raw-window-handle",
- "wgpu",
- "winit",
 ]
 
 [[package]]
