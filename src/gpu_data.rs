@@ -12,7 +12,7 @@ pub const IVEC4_: usize = 4 * INT_;
 // pub const TILE_: usize = BOOL_ + INT_ + 18 * INT_ + 4 * INT_;
 pub const TILE_: usize = 1 * IVEC4_ + 6 * IVEC4_;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Vec2<T> {
     pub s: T,
     pub t: T,

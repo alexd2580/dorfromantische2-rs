@@ -4,6 +4,7 @@ use std::{
     collections::{HashSet, VecDeque},
     fs::File,
     iter,
+    thread::JoinHandle,
     time::SystemTime,
 };
 use wgpu::util::DeviceExt;
@@ -385,11 +386,17 @@ impl Default for GameData {
 
 impl GameData {
     /// Compute the position of tile at `pos` in the index structure.
-    fn index_position_of(&self, pos: IVec2) -> usize {
-        usize::try_from(
-            (pos.t - self.index_offset.t) * self.index_size.s + (pos.s - self.index_offset.s),
-        )
-        .unwrap()
+    fn index_position_of(&self, pos: IVec2) -> Option<usize> {
+        let valid_s =
+            pos.s >= self.index_offset.s && pos.s < self.index_offset.s + self.index_size.s;
+        let valid_t =
+            pos.t >= self.index_offset.t && pos.t < self.index_offset.t + self.index_size.t;
+        (valid_s && valid_t).then(|| {
+            usize::try_from(
+                (pos.t - self.index_offset.t) * self.index_size.s + (pos.s - self.index_offset.s),
+            )
+            .unwrap()
+        })
     }
 
     /// Compute the 2D bounding box and traverse it row-first (in row-major) order.
@@ -415,7 +422,7 @@ impl GameData {
             .iter()
             .enumerate()
             .for_each(|(tile_index, tile)| {
-                index[self.index_position_of(tile.pos)] = Some(tile_index);
+                index[self.index_position_of(tile.pos).unwrap()] = Some(tile_index);
             });
 
         self.index = index;
@@ -423,8 +430,8 @@ impl GameData {
 
     /// Compute the position of tile at `pos` in the tiles' list.
     fn tile_index(&self, pos: IVec2) -> Option<usize> {
-        self.index
-            .get(self.index_position_of(pos))
+        self.index_position_of(pos)
+            .and_then(|index| self.index.get(index))
             .cloned()
             .flatten()
     }
@@ -517,7 +524,7 @@ impl GameData {
             });
     }
 
-    fn load_file(&mut self, path: &str) {
+    fn load_file(&mut self, path: &std::path::Path) {
         // Load savegame.
         let mut stream = File::open(path).expect("Failed to open file");
         let parsed = nrbf_rs::parse_nrbf(&mut stream);
@@ -542,12 +549,16 @@ impl GameData {
 struct GraphicsResources {
     // Textures.
     _forest_texture: wgpu::Texture,
+    forest_view: wgpu::TextureView,
     _city_texture: wgpu::Texture,
+    city_view: wgpu::TextureView,
     _wheat_texture: wgpu::Texture,
+    wheat_view: wgpu::TextureView,
     _water_texture: wgpu::Texture,
+    water_view: wgpu::TextureView,
 
     // Texture access.
-    _texture_sampler: wgpu::Sampler,
+    texture_sampler: wgpu::Sampler,
 
     // Generic info (changes every frame).
     view_buffer_size: u64,
@@ -602,6 +613,52 @@ impl GraphicsResources {
         }
     }
 
+    fn create_tiles_buffer(
+        graphics_device: &GraphicsDevice,
+        game_data: &GameData,
+    ) -> (u64, wgpu::Buffer) {
+        let tiles_buffer_size = u64::try_from(
+            // Offset
+            1 * gpu_data::IVEC2_
+            // Size
+            + 1 * gpu_data::IVEC2_
+            // Tiles (at least one...)
+            + game_data.index.len().max(1) * gpu_data::TILE_,
+        )
+        .unwrap();
+        let tiles_buffer = Self::create_buffer(
+            "tiles",
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            SizeOrContent::Size(tiles_buffer_size),
+            graphics_device,
+        );
+
+        (tiles_buffer_size, tiles_buffer)
+    }
+
+    fn generate_bind_group(&mut self, graphics_device: &GraphicsDevice) {
+        // Create actual bind group.
+        let bind_group_entries = [
+            (0, self.view_buffer.as_entire_binding()),
+            (1, self.tiles_buffer.as_entire_binding()),
+            (2, wgpu::BindingResource::Sampler(&self.texture_sampler)),
+            (3, wgpu::BindingResource::TextureView(&self.forest_view)),
+            (4, wgpu::BindingResource::TextureView(&self.city_view)),
+            (5, wgpu::BindingResource::TextureView(&self.wheat_view)),
+            (6, wgpu::BindingResource::TextureView(&self.water_view)),
+        ]
+        .map(|(binding, resource)| wgpu::BindGroupEntry { binding, resource });
+        let bind_group = graphics_device
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &self.bind_group_layouts[0],
+                entries: &bind_group_entries,
+                label: Some("bind_group"),
+            });
+
+        self.bind_groups.push(bind_group);
+    }
+
     fn new(graphics_device: &GraphicsDevice, game_data: &GameData) -> Self {
         let forest_texture = Self::load_texture("seamless-forest.jpg", graphics_device);
         let forest_view = forest_texture.create_view(&Default::default());
@@ -634,8 +691,12 @@ impl GraphicsResources {
             + 1 * gpu_data::FLOAT_
             // Time
             + 1 * gpu_data::FLOAT_
-            // Color bu group
-            + 1 * gpu_data::BOOL_,
+            // Coloring
+            + 1 * gpu_data::INT_
+            // Hovered index
+            + 1 * gpu_data::INT_
+            // Padding
+            + 1 * gpu_data::INT_,
         )
         .unwrap();
         let view_buffer = Self::create_buffer(
@@ -645,21 +706,8 @@ impl GraphicsResources {
             graphics_device,
         );
 
-        let tiles_buffer_size = u64::try_from(
-            // Offset
-            1 * gpu_data::IVEC2_
-            // Size
-            + 1 * gpu_data::IVEC2_
-            // Tiles (at least one...)
-            + game_data.index.len().max(1) * gpu_data::TILE_,
-        )
-        .unwrap();
-        let tiles_buffer = Self::create_buffer(
-            "tiles",
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            SizeOrContent::Size(tiles_buffer_size),
-            graphics_device,
-        );
+        let (tiles_buffer_size, tiles_buffer) =
+            Self::create_tiles_buffer(graphics_device, game_data);
 
         let uniform_type = wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Uniform,
@@ -701,38 +749,37 @@ impl GraphicsResources {
                     label: Some("bind_group_layout"),
                 });
 
-        // Create actual bind group.
-        let bind_group_entries = [
-            (0, view_buffer.as_entire_binding()),
-            (1, tiles_buffer.as_entire_binding()),
-            (2, wgpu::BindingResource::Sampler(&texture_sampler)),
-            (3, wgpu::BindingResource::TextureView(&forest_view)),
-            (4, wgpu::BindingResource::TextureView(&city_view)),
-            (5, wgpu::BindingResource::TextureView(&wheat_view)),
-            (6, wgpu::BindingResource::TextureView(&water_view)),
-        ]
-        .map(|(binding, resource)| wgpu::BindGroupEntry { binding, resource });
-        let bind_group = graphics_device
-            .device
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &bind_group_layout,
-                entries: &bind_group_entries,
-                label: Some("bind_group"),
-            });
-
-        Self {
+        let mut graphics_resources = Self {
             _forest_texture: forest_texture,
+            forest_view,
             _city_texture: city_texture,
+            city_view,
             _wheat_texture: wheat_texture,
+            wheat_view,
             _water_texture: water_texture,
-            _texture_sampler: texture_sampler,
+            water_view,
+            texture_sampler,
             view_buffer_size,
             view_buffer,
             tiles_buffer_size,
             tiles_buffer,
             bind_group_layouts: vec![bind_group_layout],
-            bind_groups: vec![bind_group],
-        }
+            bind_groups: vec![],
+        };
+
+        graphics_resources.generate_bind_group(graphics_device);
+        graphics_resources
+    }
+
+    fn update(&mut self, graphics_device: &GraphicsDevice, game_data: &GameData) {
+        let (tiles_buffer_size, tiles_buffer) =
+            Self::create_tiles_buffer(graphics_device, game_data);
+
+        self.tiles_buffer_size = tiles_buffer_size;
+        self.tiles_buffer = tiles_buffer;
+
+        self.bind_groups.clear();
+        self.generate_bind_group(graphics_device);
     }
 }
 
@@ -750,8 +797,10 @@ struct App {
     origin: (f32, f32),
     rotation: f32,
     inv_scale: f32,
-
     coloring: i32,
+    hover_index: i32,
+
+    file_choose_dialog: Option<JoinHandle<Option<std::path::PathBuf>>>,
 }
 
 impl App {
@@ -776,6 +825,8 @@ impl App {
             rotation: 0.0,
             inv_scale: 20.0,
             coloring: 0,
+            hover_index: -1,
+            file_choose_dialog: None,
         };
 
         app.write_tiles(graphics_device);
@@ -799,6 +850,29 @@ impl App {
 
     fn resize(&mut self, width: u32, height: u32) {
         self.size = (width, height);
+    }
+
+    fn on_cursor_move(&mut self, x: f32, y: f32) {
+        let dx = (x - self.mouse_position.0) / self.size.0 as f32;
+        let dy = (y - self.mouse_position.1) / self.size.1 as f32;
+
+        if self.grab_move {
+            let aspect_ratio = self.size.0 as f32 / self.size.1 as f32;
+            self.origin = (
+                self.origin.0 - dx * aspect_ratio * self.inv_scale,
+                self.origin.1 + dy * self.inv_scale,
+            );
+        }
+
+        if self.grab_rotate {
+            self.rotation += dx;
+        }
+
+        self.mouse_position = (x, y);
+    }
+
+    fn on_scroll(&mut self, y: f32) {
+        self.inv_scale = 5f32.max(self.inv_scale - y as f32).min(500.0);
     }
 
     fn write_view(&self, graphics_device: &GraphicsDevice) {
@@ -870,6 +944,39 @@ impl App {
             }
         }
     }
+
+    fn is_file_dialog_open(&self) -> bool {
+        self.file_choose_dialog.is_some()
+    }
+
+    fn open_file_dialog(&mut self) {
+        if !self.is_file_dialog_open() {
+            self.file_choose_dialog = Some(std::thread::spawn(|| {
+                rfd::FileDialog::new().set_directory(".").pick_file()
+            }))
+        }
+    }
+
+    fn handle_file_dialog(&mut self, graphics_device: &GraphicsDevice) {
+        if self
+            .file_choose_dialog
+            .as_ref()
+            .is_some_and(|handle| handle.is_finished())
+        {
+            let maybe_file = self
+                .file_choose_dialog
+                .take()
+                .unwrap()
+                .join()
+                .expect("Failed to choose file");
+            if let Some(file) = maybe_file {
+                self.game_data.load_file(&file);
+                self.graphics_resources
+                    .update(graphics_device, &self.game_data);
+                self.write_tiles(graphics_device);
+            }
+        }
+    }
 }
 
 fn run(
@@ -932,32 +1039,11 @@ fn run(
                     WindowEvent::CursorMoved {
                         position: PhysicalPosition { x, y },
                         ..
-                    } => {
-                        let x = x as f32;
-                        let y = y as f32;
-                        let dx = (x - app.mouse_position.0) / app.size.0 as f32;
-                        let dy = (y - app.mouse_position.1) / app.size.1 as f32;
-
-                        if app.grab_move {
-                            let aspect_ratio = app.size.0 as f32 / app.size.1 as f32;
-                            app.origin = (
-                                app.origin.0 - dx * aspect_ratio * app.inv_scale,
-                                app.origin.1 + dy * app.inv_scale,
-                            );
-                        }
-
-                        if app.grab_rotate {
-                            app.rotation += dx;
-                        }
-
-                        app.mouse_position = (x, y);
-                    }
+                    } => app.on_cursor_move(x as f32, y as f32),
                     WindowEvent::MouseWheel {
                         delta: MouseScrollDelta::LineDelta(_, y),
                         ..
-                    } => {
-                        app.inv_scale = 5f32.max(app.inv_scale - y as f32).min(500.0);
-                    }
+                    } => app.on_scroll(y as f32),
                     WindowEvent::CloseRequested => {
                         *control_flow = ControlFlow::Exit;
                     }
@@ -983,9 +1069,14 @@ fn run(
                     egui::TopBottomPanel::top("top_panel").show(&ctx, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Dorfromantik viewer");
-                            if ui.button("Load file").clicked() {
-                                let files = rfd::FileDialog::new().set_directory(".").pick_file();
-                                dbg!(files);
+                            if ui
+                                .add_enabled(
+                                    !app.is_file_dialog_open(),
+                                    egui::Button::new("Load file"),
+                                )
+                                .clicked()
+                            {
+                                app.open_file_dialog();
                             }
                             ui.toggle_value(&mut sidebar_expanded, "Visual settings");
                         });
@@ -1010,7 +1101,7 @@ fn run(
                     // });
                 });
 
-                // let egui_paint_jobs = ui.context.tessellate(full_output.shapes);
+                app.handle_file_dialog(&graphics.graphics_device);
                 app.write_view(&graphics.graphics_device);
                 graphics.redraw(app.bind_groups(), &mut ui, full_output);
             }
