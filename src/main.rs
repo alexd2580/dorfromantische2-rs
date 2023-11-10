@@ -370,7 +370,6 @@ impl Default for GameData {
     fn default() -> Self {
         let tiles = vec![Tile {
             pos: Default::default(),
-            special: 0,
             segments: vec![],
         }];
 
@@ -534,7 +533,6 @@ impl GameData {
         // Prepend tiles list with empty tile (is this necessary when i start parsing special tiles?)
         let empty_tile = Tile {
             pos: IVec2::new(0, 0),
-            special: 0,
             segments: vec![],
         };
         self.tiles = iter::once(empty_tile)
@@ -555,8 +553,8 @@ struct GraphicsResources {
     city_view: wgpu::TextureView,
     _wheat_texture: wgpu::Texture,
     wheat_view: wgpu::TextureView,
-    _water_texture: wgpu::Texture,
-    water_view: wgpu::TextureView,
+    _river_texture: wgpu::Texture,
+    river_view: wgpu::TextureView,
 
     // Texture access.
     texture_sampler: wgpu::Sampler,
@@ -646,7 +644,7 @@ impl GraphicsResources {
             (3, wgpu::BindingResource::TextureView(&self.forest_view)),
             (4, wgpu::BindingResource::TextureView(&self.city_view)),
             (5, wgpu::BindingResource::TextureView(&self.wheat_view)),
-            (6, wgpu::BindingResource::TextureView(&self.water_view)),
+            (6, wgpu::BindingResource::TextureView(&self.river_view)),
         ]
         .map(|(binding, resource)| wgpu::BindGroupEntry { binding, resource });
         let bind_group = graphics_device
@@ -665,8 +663,8 @@ impl GraphicsResources {
         let forest_view = forest_texture.create_view(&Default::default());
         let city_texture = Self::load_texture("seamless-city.jpg", graphics_device);
         let city_view = city_texture.create_view(&Default::default());
-        let water_texture = Self::load_texture("seamless-water.jpg", graphics_device);
-        let water_view = water_texture.create_view(&Default::default());
+        let river_texture = Self::load_texture("seamless-river.jpg", graphics_device);
+        let river_view = river_texture.create_view(&Default::default());
         let wheat_texture = Self::load_texture("seamless-wheat.jpg", graphics_device);
         let wheat_view = wheat_texture.create_view(&Default::default());
 
@@ -694,10 +692,8 @@ impl GraphicsResources {
             + 1 * gpu_data::FLOAT_
             // Coloring
             + 1 * gpu_data::INT_
-            // Hovered index
-            + 1 * gpu_data::INT_
-            // Padding
-            + 1 * gpu_data::INT_,
+            // Hovered position
+            + 1 * gpu_data::IVEC2_,
         )
         .unwrap();
         let view_buffer = Self::create_buffer(
@@ -757,8 +753,8 @@ impl GraphicsResources {
             city_view,
             _wheat_texture: wheat_texture,
             wheat_view,
-            _water_texture: water_texture,
-            water_view,
+            _river_texture: river_texture,
+            river_view,
             texture_sampler,
             view_buffer_size,
             view_buffer,
@@ -800,10 +796,13 @@ struct App {
     rotation: f32,
     inv_scale: f32,
     coloring: i32,
-    hover_index: i32,
+    hover_pos: IVec2,
 
     file_choose_dialog: Option<JoinHandle<Option<std::path::PathBuf>>>,
 }
+
+const SIN_30: f32 = 0.5;
+const COS_30: f32 = 0.8660254037844387;
 
 impl App {
     fn new(window: &Window, graphics_device: &GraphicsDevice) -> Self {
@@ -825,7 +824,7 @@ impl App {
             rotation: 0.0,
             inv_scale: 20.0,
             coloring: 0,
-            hover_index: -1,
+            hover_pos: IVec2::ZERO,
             file_choose_dialog: None,
         };
 
@@ -856,6 +855,32 @@ impl App {
         self.aspect_ratio = fsize.x / fsize.y;
     }
 
+    fn hex_to_world(pos: &IVec2) -> Vec2 {
+        Vec2::new(pos.x as f32 * 1.5, (pos.x + pos.y * 2) as f32 * COS_30)
+    }
+
+    fn world_to_hex(mut pos: Vec2) -> IVec2 {
+        let x = (pos.x / 1.5).round();
+        let y_rest = pos.y - x * COS_30;
+        let y = (y_rest / (2.0 * COS_30)).round();
+
+        let prelim = IVec2::new(x as i32, y as i32);
+        pos = pos - Self::hex_to_world(&prelim);
+        let xc = (0.5 * Vec2::new(COS_30, SIN_30).dot(pos) / COS_30).round() as i32;
+        let xyc = (0.5 * Vec2::new(-COS_30, SIN_30).dot(pos) / COS_30).round() as i32;
+
+        prelim + IVec2::new(xc - xyc, xyc)
+    }
+
+    /// Compute hex coordinates of pixel.
+    fn pixel_to_hex(&self, pos: Vec2) -> IVec2 {
+        // First, get world-coordinates of pixel.
+        let relative = pos / self.size.as_vec2();
+        let uv_2 = Vec2::new(1.0, -1.0) * (relative - 0.5);
+        let pos = self.origin + uv_2 * Vec2::new(self.aspect_ratio, 1.0) * self.inv_scale;
+        Self::world_to_hex(pos)
+    }
+
     fn on_cursor_move(&mut self, pos: Vec2) {
         let delta = (pos - self.mouse_position) / self.size.as_vec2();
 
@@ -868,6 +893,7 @@ impl App {
         }
 
         self.mouse_position = pos;
+        self.hover_pos = self.pixel_to_hex(pos);
     }
 
     fn on_scroll(&mut self, y: f32) {
@@ -918,27 +944,23 @@ impl App {
             let bptr = iptr.add(4).cast::<u8>();
 
             for (index, tile) in self.game_data.index.iter().enumerate() {
-                let tptr = bptr.add(index * gpu_data::TILE_).cast::<i32>();
+                let mut tptr = bptr.add(index * gpu_data::TILE_).cast::<i32>();
 
                 if let Some(index) = tile {
                     let tile = &self.game_data.tiles[*index];
-                    *tptr = 1;
-                    *tptr.add(1) = tile.special;
 
-                    let mut sptr = tptr.add(4);
                     for segment in tile.segments.iter() {
-                        *sptr.add(0) = segment.terrain as i32;
-                        *sptr.add(1) = segment.form as i32;
-                        *sptr.add(2) = segment.rotation;
-                        *sptr.add(3) = segment.group as i32;
-                        sptr = sptr.add(4);
+                        *tptr.add(0) = segment.terrain as i32;
+                        *tptr.add(1) = segment.form as i32;
+                        *tptr.add(2) = segment.rotation;
+                        *tptr.add(3) = segment.group as i32;
+                        tptr = tptr.add(4);
                     }
-                    for _ in tile.segments.len()..6 {
-                        *sptr.add(0) = 0;
-                        sptr = sptr.add(4);
+                    if tile.segments.len() < 6 {
+                        *tptr.add(0) = gpu_data::Terrain::Empty as i32
                     }
                 } else {
-                    *tptr = 0;
+                    *tptr = gpu_data::Terrain::Missing as i32;
                 }
             }
         }
@@ -1000,7 +1022,7 @@ fn run(
                 let event_response = ui.on_event(&event);
 
                 if event_response.repaint {
-                    window.request_redraw();
+                    // window.request_redraw();
                 }
 
                 if event_response.consumed {

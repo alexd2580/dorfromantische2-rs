@@ -1,11 +1,14 @@
 #version 460
 
+#define MISSING_SEGMENT (-1)
 #define EMPTY_SEGMENT 0
 #define HOUSE_SEGMENT 1
 #define FOREST_SEGMENT 2
 #define WHEAT_SEGMENT 3
 #define RAIL_SEGMENT 4
-#define WATER_SEGMENT 5
+#define RIVER_SEGMENT 5
+#define LAKE_SEGMENT 6
+#define STATION_SEGMENT 7
 
 #define FORM_SIZE1 0
 #define FORM_SIZE2 1
@@ -36,20 +39,6 @@
  * https://registry.khronos.org/OpenGL/specs/gl/glspec45.core.pdf#page=159
  */
 struct Tile {
-    /**
-     * Determines whether this tile is actually present, or just a placeholder.
-     */
-    // bool exists;
-
-    /**
-     * If this is non-zero, then the tile is a waterlogged train station.
-     * Currently there are no other special tiles.
-     */
-    // int special_id;
-
-    // For now we packed the header into a ivec4 due to alignment issues.
-    ivec4 header;
-
     /**
      * Interleaved;
      * - terrain (enum value); 0 means none
@@ -94,61 +83,36 @@ layout(binding=2) uniform sampler texture_sampler;
 layout(binding=3) uniform texture2D forest_texture;
 layout(binding=4) uniform texture2D city_texture;
 layout(binding=5) uniform texture2D wheat_texture;
-layout(binding=6) uniform texture2D water_texture;
+layout(binding=6) uniform texture2D river_texture;
 
 const float pi = 3.141592653589793;
 
 // PI / 6
-const float deg_30 = pi * 0.166666666;
-const float sin_30 = 0.5; // sin(deg_30);
-const float cos_30 = 0.8660254037844387; // cos(deg_30);
-
-const vec2 tile_d = vec2(1.5, 2 * cos_30);
+const float DEG_30 = pi * 0.166666666;
+const float SIN_30 = 0.5;
+const float COS_30 = 0.8660254037844387;
 
 vec2 center_coords_of(ivec2 st) {
-     return vec2(st.s * tile_d.x, st.t * tile_d.y - 0.5 * (st.s % 2) * tile_d.y);
+     return vec2(st.s * 1.5, (st.s + st.t * 2) * COS_30);
 }
 
 ivec2 grid_coords_at(vec2 pos) {
     // Calculate tile coords in skewed coordinate grid.
-    int diagonal_steps = int(round(pos.x / tile_d.x));
-    float vertical_offset = pos.y - diagonal_steps * tile_d.y / 2;
-    int vertical_steps = int(round(vertical_offset / tile_d.y));
+    float x = round(pos.x / 1.5);
+    float y_rest = pos.y - x * COS_30;
+    float y = round(y_rest / (2 * COS_30));
 
-    // Correct edges, otherwise we'd get offset rectangles and not hexes.
-    vec2 tile_center = vec2(diagonal_steps * tile_d.x, vertical_steps * tile_d.y + diagonal_steps * tile_d.y / 2);
-    vec2 offset_from_center = pos - tile_center;
+    ivec2 prelim = ivec2(x, y);
+    pos = pos - center_coords_of(prelim);
+    float xc = int(round(0.5 * dot(pos, vec2(COS_30, SIN_30)) / COS_30));
+    float xyc = int(round(0.5 * dot(pos, vec2(-COS_30, SIN_30)) / COS_30));
 
-    vec2 diagonal_to_top_right = vec2(tile_d.x, tile_d.y / 2) / tile_d.y;
-    float offset_to_top_right = dot(offset_from_center, diagonal_to_top_right);
-
-    if (offset_to_top_right > cos_30) {
-        diagonal_steps += 1;
-    } else if (offset_to_top_right < -cos_30) {
-        diagonal_steps -= 1;
-    }
-
-    vec2 diagonal_to_top_left = vec2(-tile_d.x, tile_d.y / 2) / tile_d.y;
-    float offset_to_top_left = dot(offset_from_center, diagonal_to_top_left);
-
-    if (offset_to_top_left > cos_30) {
-        diagonal_steps -= 1;
-        vertical_steps += 1;
-    } else if (offset_to_top_left < -cos_30) {
-        diagonal_steps += 1;
-        vertical_steps -= 1;
-    }
-
-    // Convert to offset coordinate grid.
-    return ivec2(
-        diagonal_steps,
-        vertical_steps + int(ceil((diagonal_steps - 0.5) / 2))
-    );
+    return prelim + ivec2(xc - xyc, xyc);
 }
 
 int tile_index(ivec2 st) {
-    bool violates_s = st.s < index_offset.s || st.s > index_offset.s + index_size.s;
-    bool violates_t = st.t < index_offset.t || st.t > index_offset.t + index_size.t;
+    bool violates_s = st.s < index_offset.s || st.s >= index_offset.s + index_size.s;
+    bool violates_t = st.t < index_offset.t || st.t >= index_offset.t + index_size.t;
     if (violates_s || violates_t) {
         return -1;
     }
@@ -172,8 +136,12 @@ vec3 color_of_terrain(int terrain) {
         return vec3(1, 1, 0);
     case RAIL_SEGMENT:
         return vec3(0.8);
-    case WATER_SEGMENT:
+    case RIVER_SEGMENT:
         return vec3(0, 0, 1);
+    case LAKE_SEGMENT:
+        return vec3(0.2, 0.2, 1);
+    case STATION_SEGMENT:
+        return vec3(0.5, 0.5, 1);
     default:
         return vec3(1, 0, 1);
     }
@@ -187,8 +155,8 @@ vec3 color_of_texture(int terrain, vec2 uv) {
         return textureLod(sampler2D(city_texture, texture_sampler), uv, 1.0).xyz;
     case WHEAT_SEGMENT:
         return textureLod(sampler2D(wheat_texture, texture_sampler), uv, 1.0).xyz;
-    case WATER_SEGMENT:
-        return textureLod(sampler2D(water_texture, texture_sampler), uv, 1.0).xyz;
+    case RIVER_SEGMENT:
+        return textureLod(sampler2D(river_texture, texture_sampler), uv, 1.0).xyz;
     default:
         return color_of_terrain(terrain);
     }
@@ -216,43 +184,43 @@ bool is_within_form(vec2 pos, int form) {
 
     switch (form) {
         case FORM_SIZE1:
-            return sqr_dist_of(pos, vec2(0, cos_30)) < single_inner;
+            return sqr_dist_of(pos, vec2(0, COS_30)) < single_inner;
         case FORM_SIZE2:
-            return sqr_dist_of(pos, vec2(0.5, cos_30)) < double_inner;
-            return pos.y > 0 && pos.y > (-pos.x * 2 * cos_30);
+            return sqr_dist_of(pos, vec2(0.5, COS_30)) < double_inner;
+            return pos.y > 0 && pos.y > (-pos.x * 2 * COS_30);
         case FORM_BRIDGE: {
-            float sqr_dist = sqr_dist_of(pos, vec2(1.5, cos_30));
+            float sqr_dist = sqr_dist_of(pos, vec2(1.5, COS_30));
             return within(single_outer, sqr_dist, triple_inner);
         }
         case FORM_STRAIGHT:
             return abs(pos.x) < 0.35;
         case FORM_SIZE3:
-            return sqr_dist_of(pos, vec2(1.5, cos_30)) < triple_inner;
+            return sqr_dist_of(pos, vec2(1.5, COS_30)) < triple_inner;
         case FORM_JUNCTION_LEFT: {
-            bool bottom_right = sqr_dist_of(pos, vec2(1.5, -cos_30)) > single_outer;
+            bool bottom_right = sqr_dist_of(pos, vec2(1.5, -COS_30)) > single_outer;
             return pos.x > -0.35 && bottom_right;
         }
         case FORM_JUNCTION_RIGHT: {
-            bool left_side = sqr_dist_of(pos, vec2(-1.5, cos_30)) > single_outer;
-            bool bottom_right = dot(vec2(sin_30, -cos_30), pos) < 0.35;
+            bool left_side = sqr_dist_of(pos, vec2(-1.5, COS_30)) > single_outer;
+            bool bottom_right = dot(vec2(SIN_30, -COS_30), pos) < 0.35;
             return left_side && bottom_right;
         }
         case FORM_THREE_WAY: {
-            float sqr_dist_lr = sqr_dist_of(vec2(abs(pos.x), pos.y), vec2(1.5, cos_30));
-            float sqr_dist_b = sqr_dist_of(pos, vec2(0, -2 * cos_30));
+            float sqr_dist_lr = sqr_dist_of(vec2(abs(pos.x), pos.y), vec2(1.5, COS_30));
+            float sqr_dist_b = sqr_dist_of(pos, vec2(0, -2 * COS_30));
             return sqr_dist_lr > single_outer && sqr_dist_b > single_outer;
         }
         case FORM_SIZE4:
             return pos.x > -0.35;
         case FORM_FAN_OUT:
-            return sqr_dist_of(vec2(abs(pos.x), pos.y), vec2(1.5, cos_30)) > single_outer;
+            return sqr_dist_of(vec2(abs(pos.x), pos.y), vec2(1.5, COS_30)) > single_outer;
         case FORM_X: {
-            float sqr_dist_tl = sqr_dist_of(pos, vec2(-1.5, cos_30));
-            float sqr_dist_br = sqr_dist_of(pos, vec2(1.5, -cos_30));
+            float sqr_dist_tl = sqr_dist_of(pos, vec2(-1.5, COS_30));
+            float sqr_dist_br = sqr_dist_of(pos, vec2(1.5, -COS_30));
             return sqr_dist_tl > single_outer && sqr_dist_br > single_outer;
         }
         case FORM_SIZE5:
-            return sqr_dist_of(pos, vec2(-1.5, cos_30)) > single_outer;
+            return sqr_dist_of(pos, vec2(-1.5, COS_30)) > single_outer;
         case FORM_SIZE6:
             return true;
 
@@ -279,40 +247,34 @@ void main() {
     }
 
     Tile tile = tiles[index];
-    // Tile is not really present, just placeholder.
-    if (tile.header.x == 0) {
-        frag_data = vec4(0, 0, 0, 1);
-        return;
-    }
 
     vec2 center = center_coords_of(st);
     vec2 offset = coords - center;
 
-    bool close_to_x_border = dot(abs(offset), vec2(cos_30, sin_30)) > 0.95 * cos_30;
-    bool close_to_y_border = abs(offset.y) > 0.95 * cos_30;
+    bool close_to_x_border = dot(abs(offset), vec2(COS_30, SIN_30)) > 0.95 * COS_30;
+    bool close_to_y_border = abs(offset.y) > 0.95 * COS_30;
     if (close_to_x_border || close_to_y_border) {
         frag_data = vec4(0, 0, 0, 1);
         return;
     }
 
-    vec3 color = vec3(0);
+    vec3 color = vec3(0.2);
     for (int i = 0; i < 6; i++) {
         int terrain = tile.segments[i].x;
 
-        // The segment (and all following segments!) is empty.
-        if (terrain == EMPTY_SEGMENT) {
-            color = vec3(0.2);
+        // The segment and the entire tile is empty.
+        if (terrain == MISSING_SEGMENT) {
+            color = vec3(0.0);
             break;
         }
 
-        // It's a special tile.... TODO
-        if (tile.header.y != 0) {
-            color = vec3(0.9);
+        // This segment and all following segments are empty.
+        if (terrain == EMPTY_SEGMENT) {
             break;
         }
 
         int rotation = tile.segments[i].z;
-        float angle = rotation * 2 * deg_30;
+        float angle = rotation * 2 * DEG_30;
         float c = cos(angle);
         float s = sin(angle);
         vec2 pos = vec2(

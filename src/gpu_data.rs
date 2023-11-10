@@ -3,7 +3,7 @@ use glam::IVec2;
 use crate::data;
 
 pub const _PAD_: usize = 4;
-pub const BOOL_: usize = 4;
+pub const _BOOL_: usize = 4;
 pub const INT_: usize = 4;
 pub const FLOAT_: usize = 4;
 pub const VEC2_: usize = 2 * FLOAT_;
@@ -11,8 +11,7 @@ pub const _VEC3_: usize = 3 * FLOAT_ + _PAD_;
 pub const IVEC2_: usize = 2 * INT_;
 pub const IVEC4_: usize = 4 * INT_;
 
-// pub const TILE_: usize = BOOL_ + INT_ + 18 * INT_ + 4 * INT_;
-pub const TILE_: usize = 1 * IVEC4_ + 6 * IVEC4_;
+pub const TILE_: usize = 6 * IVEC4_;
 
 #[derive(Clone, Copy)]
 pub enum Form {
@@ -63,12 +62,15 @@ impl From<&data::SegmentTypeId> for Form {
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Terrain {
+    Missing = -1,
     Empty = 0,
     House = 1,
     Forest = 2,
     Wheat = 3,
     Rail = 4,
-    Water = 5,
+    River = 5,
+    Lake = 6,
+    Station = 7,
 }
 
 impl From<&data::GroupTypeId> for Terrain {
@@ -79,7 +81,7 @@ impl From<&data::GroupTypeId> for Terrain {
             1 => Terrain::Forest,
             2 => Terrain::Wheat,
             3 => Terrain::Rail,
-            4 => Terrain::Water,
+            4 => Terrain::River,
             other => panic!("Unexpected terrain type value {other}"),
         }
     }
@@ -94,9 +96,16 @@ pub struct Segment {
 
 impl From<&data::Segment> for Segment {
     fn from(value: &data::Segment) -> Self {
+        let form = (&value.segment_type).into();
+        let mut terrain = (&value.group_type).into();
+        match (form, terrain) {
+            // There are no 6-sided rivers.
+            (Form::Size6, Terrain::River) => terrain = Terrain::Lake,
+            _ => {}
+        }
         Self {
-            form: (&value.segment_type).into(),
-            terrain: (&value.group_type).into(),
+            form,
+            terrain,
             rotation: value.rotation,
             group: 0,
         }
@@ -132,14 +141,18 @@ impl Segment {
 }
 
 pub struct Tile {
+    /// Use flat-top axial coordinates.
+    /// x -> 2 o'cock
+    /// y -> north
+    /// Offset coordinates are stupid and complex.
     pub pos: IVec2,
-    pub special: i32,
     pub segments: Vec<Segment>,
 }
 
 impl From<&data::Tile> for Tile {
     fn from(value: &data::Tile) -> Self {
-        let segments = value
+        let special = value.special_tile_id.0;
+        let mut segments = value
             .segments
             .iter()
             .map(|segment| {
@@ -149,25 +162,33 @@ impl From<&data::Tile> for Tile {
             })
             .collect();
 
-        Self {
-            pos: IVec2::new(value.s, value.t),
-            special: value.special_tile_id.0,
-            segments,
+        match special {
+            0 => {}
+            1 => {
+                segments = vec![Segment {
+                    form: Form::Size6,
+                    terrain: Terrain::Station,
+                    rotation: 0,
+                    group: 0,
+                }]
+            }
+            _ => unreachable!(),
         }
+
+        let pos = IVec2::new(value.s, value.t - ((value.s + 1) & -2i32) / 2);
+        Self { pos, segments }
     }
 }
 
 impl Tile {
     pub fn neighbor_coordinates(&self, rotation: i32) -> IVec2 {
-        let s_even = self.pos.x % 2 == 0;
-        let b_to_i = |b| if b { 1 } else { 0 };
         match rotation {
             0 => self.pos + IVec2::new(0, 1),
+            1 => self.pos + IVec2::new(1, 0),
+            2 => self.pos + IVec2::new(1, -1),
             3 => self.pos + IVec2::new(0, -1),
-            1 => self.pos + IVec2::new(1, b_to_i(s_even)),
-            2 => self.pos + IVec2::new(1, -b_to_i(!s_even)),
-            4 => self.pos + IVec2::new(-1, -b_to_i(!s_even)),
-            5 => self.pos + IVec2::new(-1, b_to_i(s_even)),
+            4 => self.pos + IVec2::new(-1, 0),
+            5 => self.pos + IVec2::new(-1, 1),
             _ => panic!("Rotation should be 0-5, got {rotation}"),
         }
     }
