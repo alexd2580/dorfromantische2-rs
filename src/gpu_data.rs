@@ -13,7 +13,7 @@ pub const IVEC4_: usize = 4 * INT_;
 
 pub const TILE_: usize = 6 * IVEC4_;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Form {
     Size1 = 0,
     Size2 = 1,
@@ -29,10 +29,10 @@ pub enum Form {
     Size5 = 11,
     Size6 = 12,
 
-    Unknown102 = 14,
-    Unknown105 = 15,
-    WaterSize4 = 16, // wtf?
-    Unknown111 = 17,
+    LakeSize2 = 14,
+    LakeSize3 = 15,
+    LakeSize4 = 16,
+    LakeSize5 = 17,
 }
 
 impl From<&data::SegmentTypeId> for Form {
@@ -51,16 +51,16 @@ impl From<&data::SegmentTypeId> for Form {
             11 => Form::X,
             12 => Form::Size5,
             13 => Form::Size6,
-            102 => Form::Unknown102,
-            105 => Form::Unknown105,
-            109 => Form::WaterSize4,
-            111 => Form::Unknown111,
+            102 => Form::LakeSize2,
+            105 => Form::LakeSize3,
+            109 => Form::LakeSize4,
+            111 => Form::LakeSize5,
             other => panic!("Unexpected segment type value {other}"),
         }
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Terrain {
     Missing = -1,
     Empty = 0,
@@ -96,11 +96,30 @@ pub struct Segment {
 
 impl From<&data::Segment> for Segment {
     fn from(value: &data::Segment) -> Self {
-        let form = (&value.segment_type).into();
+        let mut form = (&value.segment_type).into();
         let mut terrain = (&value.group_type).into();
         match (form, terrain) {
             // There are no 6-sided rivers.
+            (Form::LakeSize2, Terrain::River) => {
+                terrain = Terrain::Lake;
+                form = Form::Size2;
+            }
+            (Form::LakeSize3, Terrain::River) => {
+                terrain = Terrain::Lake;
+                form = Form::Size3;
+            }
+            (Form::LakeSize4, Terrain::River) => {
+                terrain = Terrain::Lake;
+                form = Form::Size4;
+            }
+            (Form::LakeSize5, Terrain::River) => {
+                terrain = Terrain::Lake;
+                form = Form::Size5;
+            }
             (Form::Size6, Terrain::River) => terrain = Terrain::Lake,
+            (Form::LakeSize2 | Form::LakeSize3 | Form::LakeSize4 | Form::LakeSize5, _) => {
+                unreachable!()
+            }
             _ => {}
         }
         Self {
@@ -128,10 +147,10 @@ impl Segment {
             Form::X => &[0, 1, 3, 4],
             Form::Size5 => &[0, 1, 2, 3, 4],
             Form::Size6 => &[0, 1, 2, 3, 4, 5],
-            Form::Unknown102 => &[],
-            Form::Unknown105 => &[],
-            Form::WaterSize4 => &[0, 1, 2, 3],
-            Form::Unknown111 => &[],
+            Form::LakeSize2 => &[],
+            Form::LakeSize3 => &[],
+            Form::LakeSize4 => &[0, 1, 2, 3],
+            Form::LakeSize5 => &[],
         };
         local_rotations
             .iter()
@@ -175,6 +194,8 @@ impl From<&data::Tile> for Tile {
             _ => unreachable!(),
         }
 
+        // Hex grid tutorial:
+        // https://www.redblobgames.com/grids/hexagons/#line-drawing
         let pos = IVec2::new(value.s, value.t - ((value.s + 1) & -2i32) / 2);
         Self { pos, segments }
     }

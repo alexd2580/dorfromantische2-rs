@@ -144,13 +144,13 @@ impl TryFrom<&Value> for Segment {
 
 #[allow(dead_code)]
 #[derive(Debug)]
-struct QuestTile {
-    quest_tile_id: QuestTileId,
-    quest_active: bool,
+pub struct QuestTile {
+    pub quest_tile_id: QuestTileId,
+    pub quest_active: bool,
     quest_queue_index: i32,
     target_value: i32,
     quest_level: i32,
-    quest_id: QuestId,
+    pub quest_id: QuestId,
     unlocked_challenge_id: ChallengeId,
     version: i32,
 }
@@ -182,7 +182,7 @@ pub struct Tile {
     seed: i32,
     pub segments: Vec<Segment>,
     pub special_tile_id: SpecialTileId,
-    quest_tile: Option<QuestTile>,
+    pub quest_tile: Option<QuestTile>,
     version: i32,
 }
 
@@ -331,7 +331,7 @@ impl TryFrom<&Value> for GameModeId {
 }
 
 #[derive(Debug)]
-struct QuestTileId(i32);
+pub struct QuestTileId(pub i32);
 
 impl TryFrom<&Value> for QuestTileId {
     type Error = String;
@@ -357,7 +357,7 @@ impl TryFrom<&Value> for QuestTileId {
 // }
 
 #[derive(Debug)]
-struct QuestId(i32);
+pub struct QuestId(pub i32);
 
 impl TryFrom<&Value> for QuestId {
     type Error = String;

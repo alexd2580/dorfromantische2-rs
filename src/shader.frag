@@ -131,7 +131,7 @@ vec3 color_of_terrain(int terrain) {
     case HOUSE_SEGMENT:
         return vec3(0.7, 0.4, 0.4);
     case FOREST_SEGMENT:
-        return vec3(0.4, 0.7, 0.0);
+        return vec3(0.5, 0.3, 0.2);
     case WHEAT_SEGMENT:
         return vec3(1, 1, 0);
     case RAIL_SEGMENT:

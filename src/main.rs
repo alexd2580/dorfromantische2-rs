@@ -530,6 +530,18 @@ impl GameData {
         let parsed = nrbf_rs::parse_nrbf(&mut stream);
         let savegame = data::SaveGame::try_from(&parsed).unwrap();
 
+        // let mut quest_tile_ids = HashSet::<i32>::default();
+        // let mut quest_ids = HashSet::<i32>::default();
+        //
+        // savegame.tiles.iter().filter(|tile| tile.quest_tile.is_some()).for_each(|tile| {
+        //     let q = tile.quest_tile.as_ref().unwrap();
+        //     quest_ids.insert(q.quest_id.0);
+        //     quest_tile_ids.insert(q.quest_tile_id.0);
+        // });
+        //
+        // dbg!(&quest_tile_ids);
+        // dbg!(&quest_ids);
+
         // Prepend tiles list with empty tile (is this necessary when i start parsing special tiles?)
         let empty_tile = Tile {
             pos: IVec2::new(0, 0),
@@ -659,6 +671,8 @@ impl GraphicsResources {
     }
 
     fn new(graphics_device: &GraphicsDevice, game_data: &GameData) -> Self {
+        // Textures tutorial:
+        // https://sotrh.github.io/learn-wgpu/beginner/tutorial5-textures/#the-bindgroup
         let forest_texture = Self::load_texture("seamless-forest.jpg", graphics_device);
         let forest_view = forest_texture.create_view(&Default::default());
         let city_texture = Self::load_texture("seamless-city.jpg", graphics_device);
@@ -1117,9 +1131,42 @@ fn run(
                             ui.selectable_value(&mut app.coloring, 3, "Color by texture");
                         },
                     );
-                    // egui::Window::new("Select file").show(&ctx, |ui| {
-                    //     ui.label("Select file");
-                    // });
+                    if let Some(tile) = app.game_data.tile_index(app.hover_pos) {
+                        let tile_data = &app.game_data.tiles[tile];
+                        egui::Window::new("Tile")
+                            .movable(false)
+                            .collapsible(false)
+                            .resizable(false)
+                            .current_pos((app.mouse_position.x + 50.0, app.mouse_position.y - 50.0))
+                            .show(&ctx, |ui| {
+                                egui::Grid::new("tile_data").show(ui, |ui| {
+                                    ui.label("Index");
+                                    ui.label(format!("{tile}"));
+                                    ui.end_row();
+                                    ui.label("Axial position");
+                                    ui.label(format!(
+                                        "x: {}, y: {}",
+                                        app.hover_pos.x, app.hover_pos.y
+                                    ));
+                                    ui.end_row();
+
+                                    if !tile_data.segments.is_empty() {
+                                        ui.label("Segments");
+                                        ui.end_row();
+
+                                        for segment in &tile_data.segments {
+                                            ui.label("Terrain");
+                                            ui.label(format!("{:?} {:?}", segment.terrain, segment.form));
+                                            ui.end_row();
+
+                                            ui.label("Group");
+                                            ui.label(format!("{}", segment.group));
+                                            ui.end_row();
+                                        }
+                                    }
+                                });
+                            });
+                    }
                 });
 
                 app.handle_file_dialog(&graphics.graphics_device);
