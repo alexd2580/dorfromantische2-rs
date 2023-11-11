@@ -460,7 +460,7 @@ impl GameData {
                         .filter(|neighbor_segment| neighbor_segment.terrain == segment.terrain)
                         .into_iter()
                         // Get the group id.
-                        .map(|neighbor_segment| neighbor_segment.group)
+                        .map(|neighbor_segment| { if neighbor_segment.group != 0 { dbg!("WOPW"); } neighbor_segment.group })
                 })
                 .collect::<HashSet<_>>()
         };
@@ -483,7 +483,9 @@ impl GameData {
             // For each segment, aka each separate part of a tile...
             (0..self.tiles[tile].segments.len())
                 .filter(|segment| self.tiles[tile].segments[*segment].group == 0)
-                .map(|segment| (segment, collect_connected_neighbor_group_ids(tile, segment)))
+                .map(|segment| {
+                    (segment, collect_connected_neighbor_group_ids(tile, segment))
+                })
                 .for_each(|(segment, mut group_ids)| {
                     // TODO why can this happen?
                     group_ids.remove(&0);
@@ -507,6 +509,7 @@ impl GameData {
                     // Remap all connected groups to the chosen one (TODO Expensive!).
                     for other_id in group_ids.into_iter() {
                         let drain = groups[other_id].drain();
+                        // I NEVER GET ANY GROUP IDS BECAUSE THERE ARE NONE!
                         group.extend(drain);
                     }
                     groups[group_id] = group;
@@ -1156,7 +1159,10 @@ fn run(
 
                                         for segment in &tile_data.segments {
                                             ui.label("Terrain");
-                                            ui.label(format!("{:?} {:?}", segment.terrain, segment.form));
+                                            ui.label(format!(
+                                                "{:?} {:?}",
+                                                segment.terrain, segment.form
+                                            ));
                                             ui.end_row();
 
                                             ui.label("Group");
