@@ -252,7 +252,7 @@ pub struct SaveGame {
     generated_quest_count: i32,
     surrounded_tiles_count: i32,
     pub tiles: Vec<Tile>,
-    tile_stack: Vec<Tile>,
+    pub tile_stack: Vec<Tile>,
     preplaced_tiles: Vec<PreplacedTile>,
     pending_locked_challenges: Vec<ChallengeId>,
     tile_stack_count: i32,

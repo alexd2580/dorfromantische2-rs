@@ -358,8 +358,20 @@ impl Graphics {
     }
 }
 
+struct Group {
+    // Tile/segment.
+    segments: HashSet<(usize, usize)>,
+
+    // Tile/rotation.
+    open_edges: HashSet<(usize, i32)>,
+}
+
 struct GameData {
     tiles: Vec<Tile>,
+    possible_placements: HashSet<IVec2>,
+    groups: Vec<Group>,
+
+    best_placements: Vec<IVec2>,
 
     index_offset: IVec2,
     index_size: IVec2,
@@ -375,6 +387,9 @@ impl Default for GameData {
 
         let mut game_data = Self {
             tiles,
+            possible_placements: Default::default(),
+            groups: Default::default(),
+            best_placements: Default::default(),
             index_offset: Default::default(),
             index_size: Default::default(),
             index: Default::default(),
@@ -436,34 +451,36 @@ impl GameData {
             .flatten()
     }
 
+    fn connected_groups(&self, tile: usize, segment: usize) -> HashSet<usize> {
+        let segment = &self.tiles[tile].segments[segment];
+        segment
+            .rotations()
+            .into_iter()
+            .flat_map(|rotation| {
+                let neighbor_pos = self.tiles[tile].neighbor_coordinates(rotation);
+                let opposite_side = (rotation + 3) % 6;
+
+                // Get neighbor tile at `rotation`.
+                self.tile_index(neighbor_pos)
+                    // Get its segment which is at the opposite side of `rotation`.
+                    // Require that the terrain is the same.
+                    .and_then(|neighbor| {
+                        self.tiles[neighbor].connecting_segment_at(segment.terrain, opposite_side)
+                    })
+                    .into_iter()
+                    // Get the group id.
+                    .map(|neighbor_segment| neighbor_segment.group)
+            })
+            .collect::<HashSet<_>>()
+    }
+
     fn assign_groups(&mut self) {
         // Assign groups.
         let mut groups = Vec::<HashSet<(usize, usize)>>::from([Default::default()]);
         let mut next_group_index = 1;
         let mut processed = HashSet::<usize>::default();
         let mut queue = VecDeque::from([0]);
-
-        let collect_connected_neighbor_group_ids = |tile: usize, segment: usize| {
-            let segment = &self.tiles[tile].segments[segment];
-            segment
-                .rotations()
-                .into_iter()
-                .flat_map(|rotation| {
-                    let neighbor_pos = self.tiles[tile].neighbor_coordinates(rotation);
-                    let opposite_side = (rotation + 3) % 6;
-
-                    // Get neighbor tile at `rotation`.
-                    self.tile_index(neighbor_pos)
-                        // Get its segment which is at the opposite side of `rotation`.
-                        .and_then(|neighbor| self.tiles[neighbor].segment_at(opposite_side))
-                        // Require that the terrain is the same.
-                        .filter(|neighbor_segment| neighbor_segment.terrain == segment.terrain)
-                        .into_iter()
-                        // Get the group id.
-                        .map(|neighbor_segment| { if neighbor_segment.group != 0 { dbg!("WOPW"); } neighbor_segment.group })
-                })
-                .collect::<HashSet<_>>()
-        };
+        let mut open_tiles = HashSet::<IVec2>::default();
 
         // Process all tiles, breadth first.
         while !queue.is_empty() {
@@ -477,54 +494,80 @@ impl GameData {
                         processed.insert(tile);
                         queue.push_back(tile);
                     }
+                } else {
+                    open_tiles.insert(pos);
                 }
             }
 
             // For each segment, aka each separate part of a tile...
-            (0..self.tiles[tile].segments.len())
-                .filter(|segment| self.tiles[tile].segments[*segment].group == 0)
-                .map(|segment| {
-                    (segment, collect_connected_neighbor_group_ids(tile, segment))
-                })
-                .for_each(|(segment, mut group_ids)| {
-                    // TODO why can this happen?
-                    group_ids.remove(&0);
+            for segment in 0..self.tiles[tile].segments.len() {
+                if self.tiles[tile].segments[segment].group != 0 {
+                    continue;
+                }
 
-                    // Choose the new group id from the collected ids.
-                    let group_id = if group_ids.is_empty() {
-                        groups.push(Default::default());
-                        next_group_index += 1;
-                        next_group_index - 1
-                    } else if group_ids.len() == 1 {
-                        group_ids.drain().next().unwrap()
-                    } else {
-                        let min_id = group_ids.iter().fold(usize::max_value(), |a, b| a.min(*b));
-                        group_ids.remove(&min_id);
-                        min_id
-                    };
+                let mut group_ids = self.connected_groups(tile, segment);
+                group_ids.remove(&0);
 
-                    // Register the current segment with `group_id`.
-                    let mut group = std::mem::take(&mut groups[group_id]);
-                    group.insert((tile, segment));
-                    // Remap all connected groups to the chosen one (TODO Expensive!).
-                    for other_id in group_ids.into_iter() {
-                        let drain = groups[other_id].drain();
-                        // I NEVER GET ANY GROUP IDS BECAUSE THERE ARE NONE!
-                        group.extend(drain);
-                    }
-                    groups[group_id] = group;
-                });
+                // Choose the new group id from the collected ids.
+                let group_id = if group_ids.is_empty() {
+                    groups.push(Default::default());
+                    next_group_index += 1;
+                    next_group_index - 1
+                } else if group_ids.len() == 1 {
+                    group_ids.drain().next().unwrap()
+                } else {
+                    let min_id = group_ids.iter().fold(usize::max_value(), |a, b| a.min(*b));
+                    group_ids.remove(&min_id);
+                    min_id
+                };
+
+                // Assign the group to the current segment.
+                self.tiles[tile].segments[segment].group = group_id;
+                // Register the current segment with `group_id`.
+                let mut group = std::mem::take(&mut groups[group_id]);
+                group.insert((tile, segment));
+                // Remap all connected groups to the chosen one (TODO Expensive!).
+                for other_id in group_ids.into_iter() {
+                    group.extend(groups[other_id].drain().inspect(|(tile, segment)| {
+                        self.tiles[*tile].segments[*segment].group = group_id;
+                    }));
+                }
+                groups[group_id] = group;
+            }
         }
 
-        // Assign `group_id`s.
-        groups
+        let mut groups = groups
             .into_iter()
-            .enumerate()
-            .for_each(|(group_id, segments)| {
-                segments.into_iter().for_each(|(tile, segment)| {
-                    self.tiles[tile].segments[segment].group = group_id;
+            .map(|segments| Group {
+                segments,
+                open_edges: Default::default(),
+            })
+            .collect::<Vec<_>>();
+
+        open_tiles
+            .iter()
+            .flat_map(|pos| {
+                (0..6).map(|rotation| {
+                    (
+                        Tile::neighbor_coordinates_of(*pos, rotation),
+                        Tile::opposite_side(rotation),
+                    )
                 })
+            })
+            .filter_map(|(position, rotation)| {
+                self.tile_index(position).map(|index| (index, rotation))
+            })
+            .flat_map(|(tile, rotation)| {
+                self.tiles[tile]
+                    .segments_at(rotation)
+                    .map(move |segment| (tile, rotation, segment))
+            })
+            .for_each(|(tile, rotation, segment)| {
+                groups[segment.group].open_edges.insert((tile, rotation));
             });
+
+        self.possible_placements = open_tiles;
+        self.groups = groups;
     }
 
     fn load_file(&mut self, path: &std::path::Path) {
@@ -532,6 +575,9 @@ impl GameData {
         let mut stream = File::open(path).expect("Failed to open file");
         let parsed = nrbf_rs::parse_nrbf(&mut stream);
         let savegame = data::SaveGame::try_from(&parsed).unwrap();
+
+        // TODO here
+        dbg!(Tile::from(&savegame.tile_stack[0]));
 
         // let mut quest_tile_ids = HashSet::<i32>::default();
         // let mut quest_ids = HashSet::<i32>::default();
@@ -696,22 +742,34 @@ impl GraphicsResources {
                 ..Default::default()
             });
 
-        let view_buffer_size = u64::try_from(
-            // Size
-            1 * gpu_data::IVEC2_
-            // Origin
-            + 1 * gpu_data::VEC2_
-            // Rotation
-            + 1 * gpu_data::FLOAT_
-             // InvScale
-            + 1 * gpu_data::FLOAT_
-            // Time
-            + 1 * gpu_data::FLOAT_
-            // Coloring
-            + 1 * gpu_data::INT_
-            // Hovered position
-            + 1 * gpu_data::IVEC2_,
-        )
+        let view_buffer_size = u64::try_from({
+            // 2 int + 2 float
+            let size = gpu_data::IVEC2_;
+            let aspect_ratio = gpu_data::FLOAT_;
+            let time = gpu_data::FLOAT_;
+
+            // 4 float
+            let origin = gpu_data::VEC2_;
+            let rotation = gpu_data::FLOAT_;
+            let inv_scale = gpu_data::FLOAT_;
+
+            // 4 int
+            let hover_pos = gpu_data::IVEC2_;
+            let hover_rotation = gpu_data::INT_;
+            let pad2 = gpu_data::PAD_;
+
+            // 4 int
+            let hover_tile = gpu_data::INT_;
+            let hover_group = gpu_data::INT_;
+
+            let coloring = gpu_data::INT_;
+            let highlight_selected = gpu_data::INT_; // actually bool
+
+            (size + aspect_ratio + time)
+                + (origin + rotation + inv_scale)
+                + (hover_pos + hover_rotation + pad2)
+                + (hover_tile + hover_group + coloring + highlight_selected)
+        })
         .unwrap();
         let view_buffer = Self::create_buffer(
             "view",
@@ -809,11 +867,20 @@ struct App {
 
     size: UVec2,
     aspect_ratio: f32,
+
     origin: Vec2,
     rotation: f32,
     inv_scale: f32,
-    coloring: i32,
+
     hover_pos: IVec2,
+    hover_rotation: i32,
+
+    hover_tile: Option<usize>,
+    hover_group: Option<usize>,
+
+    coloring: i32,
+    highlight_hovered_group: bool,
+    highlight_open_groups: bool,
 
     file_choose_dialog: Option<JoinHandle<Option<std::path::PathBuf>>>,
 }
@@ -841,7 +908,12 @@ impl App {
             rotation: 0.0,
             inv_scale: 20.0,
             coloring: 0,
+            highlight_hovered_group: false,
+            highlight_open_groups: true,
             hover_pos: IVec2::ZERO,
+            hover_rotation: 0,
+            hover_tile: None,
+            hover_group: None,
             file_choose_dialog: None,
         };
 
@@ -889,13 +961,12 @@ impl App {
         prelim + IVec2::new(xc - xyc, xyc)
     }
 
-    /// Compute hex coordinates of pixel.
-    fn pixel_to_hex(&self, pos: Vec2) -> IVec2 {
+    /// Compute world coordinates of pixel.
+    fn pixel_to_world(&self, pos: Vec2) -> Vec2 {
         // First, get world-coordinates of pixel.
         let relative = pos / self.size.as_vec2();
         let uv_2 = Vec2::new(1.0, -1.0) * (relative - 0.5);
-        let pos = self.origin + uv_2 * Vec2::new(self.aspect_ratio, 1.0) * self.inv_scale;
-        Self::world_to_hex(pos)
+        self.origin + uv_2 * Vec2::new(self.aspect_ratio, 1.0) * self.inv_scale
     }
 
     fn on_cursor_move(&mut self, pos: Vec2) {
@@ -910,7 +981,30 @@ impl App {
         }
 
         self.mouse_position = pos;
-        self.hover_pos = self.pixel_to_hex(pos);
+        let world_pos = self.pixel_to_world(pos);
+        self.hover_pos = Self::world_to_hex(world_pos);
+        let offset = world_pos - App::hex_to_world(&self.hover_pos);
+
+        let gradient = 2.0 * COS_30 * offset.x;
+        self.hover_rotation = match (offset.y > 0.0, offset.y > gradient, offset.y > -gradient) {
+            (true, true, true) => 0,
+            (true, false, _) => 1,
+            (false, _, true) => 2,
+            (false, false, false) => 3,
+            (false, true, _) => 4,
+            (true, _, false) => 5,
+        };
+
+        self.hover_tile = self.game_data.tile_index(self.hover_pos);
+        self.hover_group = self
+            .hover_tile
+            .clone()
+            .and_then(|tile| {
+                self.game_data.tiles[tile]
+                    .segments_at(self.hover_rotation)
+                    .next()
+            })
+            .map(|segment| segment.group);
     }
 
     fn on_scroll(&mut self, y: f32) {
@@ -924,19 +1018,33 @@ impl App {
             .write_buffer_with(&self.graphics_resources.view_buffer, 0, view_buffer_size)
             .expect("Failed to create buffer view");
 
+        // 4 int
+
         unsafe {
             let ptr = buffer_view.as_mut_ptr();
             let uptr = ptr.cast::<u32>();
             *uptr.add(0) = self.size.x;
             *uptr.add(1) = self.size.y;
             let fptr = uptr.add(2).cast::<f32>();
-            *fptr.add(0) = self.origin.x;
-            *fptr.add(1) = self.origin.y;
-            *fptr.add(2) = self.rotation;
-            *fptr.add(3) = self.inv_scale;
-            *fptr.add(4) = self.elapsed_secs();
-            let iptr = fptr.add(5).cast::<i32>();
-            *iptr.add(0) = self.coloring;
+            *fptr.add(0) = self.aspect_ratio;
+            *fptr.add(1) = self.elapsed_secs();
+            *fptr.add(2) = self.origin.x;
+            *fptr.add(3) = self.origin.y;
+            *fptr.add(4) = self.rotation;
+            *fptr.add(5) = self.inv_scale;
+            let iptr = fptr.add(6).cast::<i32>();
+            *iptr.add(0) = self.hover_pos.x;
+            *iptr.add(1) = self.hover_pos.y;
+            *iptr.add(2) = self.hover_rotation;
+            // pad
+            *iptr.add(4) = self.hover_tile.map_or(-1, |v| v.try_into().unwrap());
+            *iptr.add(5) = self.hover_group.map_or(-1, |v| v.try_into().unwrap());
+            *iptr.add(6) = self.coloring;
+
+            let highlight_flags = if self.highlight_hovered_group { 1 } else { 0 }
+                | if self.highlight_open_groups { 2 } else { 0 };
+
+            *iptr.add(7) = highlight_flags;
         }
     }
 
@@ -970,7 +1078,12 @@ impl App {
                         *tptr.add(0) = segment.terrain as i32;
                         *tptr.add(1) = segment.form as i32;
                         *tptr.add(2) = segment.rotation;
-                        *tptr.add(3) = segment.group as i32;
+
+                        let group = segment.group;
+                        let is_closed = self.game_data.groups[group].open_edges.is_empty();
+                        let group_bytes = group as i32 | if is_closed { 2 << 30 } else { 0 };
+
+                        *tptr.add(3) = group_bytes;
                         tptr = tptr.add(4);
                     }
                     if tile.segments.len() < 6 {
@@ -1024,6 +1137,7 @@ fn run(
     mut ui: Ui,
     mut app: App,
 ) {
+    let mut show_tooltip = true;
     let mut sidebar_expanded = false;
     event_loop.run(move |event, _, control_flow| {
         // What the actual??
@@ -1127,51 +1241,84 @@ fn run(
                             ui.add(
                                 egui::Slider::new(&mut app.inv_scale, 5.0..=500.0).text("Zoom out"),
                             );
+                            ui.checkbox(&mut show_tooltip, "Show tooltip");
                             ui.label("Coloring of sections:");
                             ui.selectable_value(&mut app.coloring, 0, "Color by terrain type");
                             ui.selectable_value(&mut app.coloring, 1, "Color by group statically");
                             ui.selectable_value(&mut app.coloring, 2, "Color by group dynamically");
                             ui.selectable_value(&mut app.coloring, 3, "Color by texture");
+                            ui.checkbox(
+                                &mut app.highlight_hovered_group,
+                                "Highlight hovered group",
+                            );
+                            ui.checkbox(&mut app.highlight_open_groups, "Highlight open groups");
                         },
                     );
-                    if let Some(tile) = app.game_data.tile_index(app.hover_pos) {
-                        let tile_data = &app.game_data.tiles[tile];
-                        egui::Window::new("Tile")
-                            .movable(false)
-                            .collapsible(false)
-                            .resizable(false)
-                            .current_pos((app.mouse_position.x + 50.0, app.mouse_position.y - 50.0))
-                            .show(&ctx, |ui| {
-                                egui::Grid::new("tile_data").show(ui, |ui| {
-                                    ui.label("Index");
-                                    ui.label(format!("{tile}"));
-                                    ui.end_row();
-                                    ui.label("Axial position");
-                                    ui.label(format!(
-                                        "x: {}, y: {}",
-                                        app.hover_pos.x, app.hover_pos.y
-                                    ));
-                                    ui.end_row();
-
-                                    if !tile_data.segments.is_empty() {
-                                        ui.label("Segments");
+                    if show_tooltip {
+                        if let Some(tile_index) = app.hover_tile {
+                            let tile = &app.game_data.tiles[tile_index];
+                            let response = egui::Window::new(format!("Tile {tile_index}"))
+                                .movable(false)
+                                .collapsible(false)
+                                .resizable(false)
+                                .current_pos((
+                                    app.mouse_position.x + 50.0,
+                                    app.mouse_position.y - 50.0,
+                                ))
+                                .show(&ctx, |ui| {
+                                    egui::Grid::new("tile_data").show(ui, |ui| {
+                                        ui.label("Axial position");
+                                        ui.label(format!(
+                                            "x: {}, y: {}",
+                                            app.hover_pos.x, app.hover_pos.y
+                                        ));
                                         ui.end_row();
 
-                                        for segment in &tile_data.segments {
-                                            ui.label("Terrain");
-                                            ui.label(format!(
-                                                "{:?} {:?}",
-                                                segment.terrain, segment.form
-                                            ));
+                                        if !tile.segments.is_empty() {
+                                            ui.label("Segments");
                                             ui.end_row();
 
-                                            ui.label("Group");
-                                            ui.label(format!("{}", segment.group));
-                                            ui.end_row();
+                                            for segment in &tile.segments {
+                                                ui.label("Terrain");
+                                                ui.label(format!(
+                                                    "{:?} {:?}",
+                                                    segment.terrain, segment.form
+                                                ));
+                                                ui.end_row();
+
+                                                ui.label("Group");
+                                                ui.label(format!("{}", segment.group));
+                                                ui.end_row();
+                                            }
                                         }
-                                    }
+                                    });
                                 });
-                            });
+
+                            if let Some(group_index) = app.hover_group {
+                                let group = &app.game_data.groups[group_index];
+                                let tile_rect = response.unwrap().response.rect;
+                                let pos = (tile_rect.min.x, tile_rect.max.y + 10.0);
+                                egui::Window::new(format!("Group {group_index}"))
+                                    .movable(false)
+                                    .collapsible(false)
+                                    .resizable(false)
+                                    .current_pos(pos)
+                                    .show(&ctx, |ui| {
+                                        egui::Grid::new("group_data").show(ui, |ui| {
+                                            ui.label("Segment count");
+                                            ui.label(format!("{}", group.segments.len()));
+                                            ui.end_row();
+                                            ui.label("Closed");
+                                            ui.label(if group.open_edges.is_empty() {
+                                                "Yes"
+                                            } else {
+                                                "No"
+                                            });
+                                            ui.end_row();
+                                        });
+                                    });
+                            }
+                        }
                     }
                 });
 

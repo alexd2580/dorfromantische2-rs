@@ -2,12 +2,12 @@ use glam::IVec2;
 
 use crate::data;
 
-pub const _PAD_: usize = 4;
+pub const PAD_: usize = 4;
 pub const _BOOL_: usize = 4;
 pub const INT_: usize = 4;
 pub const FLOAT_: usize = 4;
 pub const VEC2_: usize = 2 * FLOAT_;
-pub const _VEC3_: usize = 3 * FLOAT_ + _PAD_;
+pub const _VEC3_: usize = 3 * FLOAT_ + PAD_;
 pub const IVEC2_: usize = 2 * INT_;
 pub const IVEC4_: usize = 4 * INT_;
 
@@ -70,7 +70,29 @@ pub enum Terrain {
     Rail = 4,
     River = 5,
     Lake = 6,
-    Station = 7,
+    RailStation = 7,
+    LakeStation = 8,
+}
+
+impl Terrain {
+    pub fn connects_to(&self, terrain: Terrain) -> bool {
+        if self == &terrain {
+            return true;
+        }
+        match (*self, terrain) {
+            (Terrain::Lake, Terrain::River) => true,
+            (Terrain::Lake, Terrain::LakeStation) => true,
+            (Terrain::River, Terrain::Lake) => true,
+            (Terrain::River, Terrain::LakeStation) => true,
+            (Terrain::LakeStation, Terrain::Lake) => true,
+            (Terrain::LakeStation, Terrain::River) => true,
+            (Terrain::Rail, Terrain::RailStation) => true,
+            (Terrain::RailStation, Terrain::Rail) => true,
+            (Terrain::Empty, _) => false,
+            (Terrain::Missing, _) => false,
+            (a, b) => a == b,
+        }
+    }
 }
 
 impl From<&data::GroupTypeId> for Terrain {
@@ -87,6 +109,7 @@ impl From<&data::GroupTypeId> for Terrain {
     }
 }
 
+#[derive(Debug)]
 pub struct Segment {
     pub form: Form,
     pub terrain: Terrain,
@@ -159,6 +182,7 @@ impl Segment {
     }
 }
 
+#[derive(Debug)]
 pub struct Tile {
     /// Use flat-top axial coordinates.
     /// x -> 2 o'cock
@@ -184,12 +208,20 @@ impl From<&data::Tile> for Tile {
         match special {
             0 => {}
             1 => {
-                segments = vec![Segment {
-                    form: Form::Size6,
-                    terrain: Terrain::Station,
-                    rotation: 0,
-                    group: 0,
-                }]
+                segments = vec![
+                    Segment {
+                        form: Form::Size6,
+                        terrain: Terrain::RailStation,
+                        rotation: 0,
+                        group: 0,
+                    },
+                    Segment {
+                        form: Form::Size6,
+                        terrain: Terrain::LakeStation,
+                        rotation: 0,
+                        group: 0,
+                    },
+                ]
             }
             _ => unreachable!(),
         }
@@ -202,21 +234,35 @@ impl From<&data::Tile> for Tile {
 }
 
 impl Tile {
-    pub fn neighbor_coordinates(&self, rotation: i32) -> IVec2 {
+    pub fn opposite_side(rotation: i32) -> i32 {
+        (rotation + 3) % 6
+    }
+
+    pub fn neighbor_coordinates_of(pos: IVec2, rotation: i32) -> IVec2 {
         match rotation {
-            0 => self.pos + IVec2::new(0, 1),
-            1 => self.pos + IVec2::new(1, 0),
-            2 => self.pos + IVec2::new(1, -1),
-            3 => self.pos + IVec2::new(0, -1),
-            4 => self.pos + IVec2::new(-1, 0),
-            5 => self.pos + IVec2::new(-1, 1),
+            0 => pos + IVec2::new(0, 1),
+            1 => pos + IVec2::new(1, 0),
+            2 => pos + IVec2::new(1, -1),
+            3 => pos + IVec2::new(0, -1),
+            4 => pos + IVec2::new(-1, 0),
+            5 => pos + IVec2::new(-1, 1),
             _ => panic!("Rotation should be 0-5, got {rotation}"),
         }
     }
 
-    pub fn segment_at(&self, rotation: i32) -> Option<&Segment> {
+    pub fn neighbor_coordinates(&self, rotation: i32) -> IVec2 {
+        Tile::neighbor_coordinates_of(self.pos, rotation)
+    }
+
+    /// There can be multiple segments at a single rotation due to the station tile.
+    pub fn segments_at(&self, rotation: i32) -> impl Iterator<Item = &Segment> {
         self.segments
             .iter()
-            .find(|segment| segment.rotations().into_iter().any(|r| r == rotation))
+            .filter(move |segment| segment.rotations().into_iter().any(|r| r == rotation))
+    }
+
+    pub fn connecting_segment_at(&self, terrain: Terrain, rotation: i32) -> Option<&Segment> {
+        self.segments_at(rotation)
+            .find(|segment| segment.terrain.connects_to(terrain))
     }
 }

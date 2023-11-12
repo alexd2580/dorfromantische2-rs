@@ -8,7 +8,8 @@
 #define RAIL_SEGMENT 4
 #define RIVER_SEGMENT 5
 #define LAKE_SEGMENT 6
-#define STATION_SEGMENT 7
+#define RAIL_STATION_SEGMENT 7
+#define LAKE_STATION_SEGMENT 8
 
 #define FORM_SIZE1 0
 #define FORM_SIZE2 1
@@ -33,6 +34,11 @@
 #define COLOR_BY_GROUP_STATIC 1
 #define COLOR_BY_GROUP_DYNAMIC 2
 #define COLOR_BY_TEXTURE 3
+
+#define HIGHLIGHT_HOVERED_GROUP 1
+#define HIGHLIGHT_OPEN_GROUPS 2
+
+#define GROUP_IS_CLOSED (2 << 30)
 
 /**
  * For reference on shader block layout see:
@@ -64,13 +70,21 @@ layout(location=0) out vec4 frag_data;
 
 layout(std140, binding=0) uniform View {
     ivec2 size;
+    float aspect_ratio;
+    float time;
+
     vec2 origin;
     float rotation;
     float inv_scale;
-    float time;
-    int coloring;
-    int hover_index;
+
+    ivec2 hover_pos;
+    int hover_rotation;
     int pad_;
+
+    int hover_tile;
+    int hover_group;
+    int coloring;
+    int highlight_flags;
 };
 
 layout(std140, binding=1) readonly buffer Tiles {
@@ -140,7 +154,8 @@ vec3 color_of_terrain(int terrain) {
         return vec3(0, 0, 1);
     case LAKE_SEGMENT:
         return vec3(0.2, 0.2, 1);
-    case STATION_SEGMENT:
+    case RAIL_STATION_SEGMENT:
+    case LAKE_STATION_SEGMENT:
         return vec3(0.5, 0.5, 1);
     default:
         return vec3(1, 0, 1);
@@ -234,7 +249,6 @@ bool is_within_form(vec2 pos, int form) {
 }
 
 void main() {
-    float aspect_ratio = float(size.s) / size.t;
     vec2 coords = origin + vec2(uv.s * aspect_ratio, uv.t) * 0.5 * inv_scale;
     ivec2 st = grid_coords_at(coords);
 
@@ -283,21 +297,33 @@ void main() {
         );
 
         int form = tile.segments[i].y;
+        int group_bytes = tile.segments[i].w;
+        int group = group_bytes & ~GROUP_IS_CLOSED;
+        bool group_is_closed = (group_bytes & GROUP_IS_CLOSED) != 0;
         if (is_within_form(pos, form)) {
             switch (coloring) {
             case COLOR_BY_TERRAIN:
                 color = color_of_terrain(terrain);
                 break;
             case COLOR_BY_GROUP_STATIC:
-                color = color_of_group(tile.segments[i].w, 0.0);
+                color = color_of_group(group, 0.0);
                 break;
             case COLOR_BY_GROUP_DYNAMIC:
-                color = color_of_group(tile.segments[i].w, 2 * time);
+                color = color_of_group(group, 2 * time);
                 break;
             case COLOR_BY_TEXTURE:
                 color = color_of_texture(terrain, -0.1 * coords);
                 break;
             }
+
+            bool highlight_hovered = (highlight_flags & HIGHLIGHT_HOVERED_GROUP) != 0;
+            bool highlight_open = (highlight_flags & HIGHLIGHT_OPEN_GROUPS) != 0;
+            if (highlight_hovered && hover_group != -1 && hover_group != group) {
+                color *= 0.1;
+            } else if (highlight_open && group_is_closed) {
+                color *= 0.1;
+            }
+
             break;
         }
     }
