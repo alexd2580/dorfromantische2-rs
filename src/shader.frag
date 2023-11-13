@@ -85,6 +85,10 @@ layout(std140, binding=0) uniform View {
     int hover_group;
     int coloring;
     int highlight_flags;
+
+    ivec2 gold;
+    ivec2 silver;
+    ivec2 bronze;
 };
 
 layout(std140, binding=1) readonly buffer Tiles {
@@ -99,10 +103,10 @@ layout(binding=4) uniform texture2D city_texture;
 layout(binding=5) uniform texture2D wheat_texture;
 layout(binding=6) uniform texture2D river_texture;
 
-const float pi = 3.141592653589793;
+const float PI = 3.141592653589793;
 
 // PI / 6
-const float DEG_30 = pi * 0.166666666;
+const float DEG_30 = PI * 0.166666666;
 const float SIN_30 = 0.5;
 const float COS_30 = 0.8660254037844387;
 
@@ -251,6 +255,20 @@ bool is_within_form(vec2 pos, int form) {
 void main() {
     vec2 coords = origin + vec2(uv.s * aspect_ratio, uv.t) * 0.5 * inv_scale;
     ivec2 st = grid_coords_at(coords);
+
+    float twice_per_sec = 0.5 * sin(2 * 2 * PI * time) + 0.5;
+    if (st == gold) {
+        frag_data = vec4(twice_per_sec * vec3(0.9, 0.85, 0), 1);
+        return;
+    }
+    if (st == silver) {
+        frag_data = vec4(twice_per_sec * vec3(0.85), 1);
+        return;
+    }
+    if (st == bronze) {
+        frag_data = vec4(twice_per_sec * vec3(0.8, 0.5, 0.2), 1);
+        return;
+    }
 
     // Load tile info.
     int index = tile_index(st);
