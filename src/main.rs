@@ -362,7 +362,6 @@ const COS_30: f32 = 0.8660254;
 
 impl App {
     fn create_view_buffer(gpu: &Gpu) -> Buffer {
-        // View buffer.
         let view_buffer_size = u64::try_from({
             // 2 int + 2 float
             let size = data::IVEC2_;
@@ -407,17 +406,8 @@ impl App {
     }
 
     #[allow(clippy::identity_op)]
-    fn create_tiles_buffer(gpu: &Gpu, num_tiles: usize) -> Buffer {
-        // Tiles buffer.
-        let tiles_buffer_size = u64::try_from(
-            // Offset
-            1 * data::IVEC2_
-            // Size
-            + 1 * data::IVEC2_
-            // Tiles (at least one...)
-            + num_tiles.max(1) * data::TILE_,
-        )
-        .unwrap();
+    fn create_tiles_buffer(gpu: &Gpu, map: &Map) -> Buffer {
+        let tiles_buffer_size = u64::try_from(map.byte_size()).unwrap();
         gpu.create_buffer(
             "tiles",
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
@@ -441,7 +431,7 @@ impl App {
 
         let textures = Textures::new(gpu);
         let view_buffer = Self::create_view_buffer(gpu);
-        let tiles_buffer = Self::create_tiles_buffer(gpu, map.tiles().len());
+        let tiles_buffer = Self::create_tiles_buffer(gpu, &map);
         let bind_groups = BindGroups::new(
             gpu,
             &[
@@ -604,8 +594,8 @@ impl App {
             *iptr.add(9) = self.hover_pos.y;
             *uptr.add(10) = self.hover_rotation as u32;
             // pad
-            *uptr.add(12) = self.hover_tile.unwrap_or(TileId::MAX).try_into().unwrap();
-            *uptr.add(13) = self.hover_group.unwrap_or(GroupId::MAX).try_into().unwrap();
+            *uptr.add(12) = self.hover_tile.map_or(u32::MAX, |x| x.try_into().unwrap());
+            *uptr.add(13) = self.hover_group.map_or(u32::MAX, |x| x.try_into().unwrap());
             *iptr.add(14) = self.coloring;
             let highlight_flags = if self.highlight_hovered_group { 1 } else { 0 }
                 | if self.highlight_open_groups { 2 } else { 0 };
@@ -647,7 +637,7 @@ impl App {
         let savegame = raw_data::SaveGame::try_from(&parsed).unwrap();
 
         self.map = Map::from(&savegame);
-        self.tiles_buffer = Self::create_tiles_buffer(gpu, self.map.tiles().len());
+        self.tiles_buffer = Self::create_tiles_buffer(gpu, &self.map);
         self.generate_bind_group(gpu);
         self.write_tiles(gpu);
     }

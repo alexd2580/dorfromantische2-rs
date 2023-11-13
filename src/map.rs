@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    data::{Rotation, SegmentId, Terrain, Tile, TileId, TILE_},
+    data::{Rotation, SegmentId, Terrain, Tile, TileId, IVEC2_, TILE_},
     index::Index,
     raw_data,
 };
@@ -192,9 +192,10 @@ impl Map {
                                 tiles[neighbor_id]
                                     .connecting_segment_at(segment.terrain, opposite_side)
                                     // Get the group id.
-                                    .map(|(segment_id, _)| {
-                                        assigned_groups[&(neighbor_id, segment_id)]
+                                    .and_then(|(segment_id, _)| {
+                                        assigned_groups.get(&(neighbor_id, segment_id))
                                     })
+                                    .cloned()
                             })
                     })
                     .collect::<HashSet<_>>();
@@ -279,6 +280,19 @@ impl Map {
                     .unwrap_or(0)
             })
             .sum()
+    }
+
+    pub fn byte_size(&self) -> usize {
+        let num_tiles = self.index.index_data().len();
+        #[allow(unused_parens)]
+        (
+            // Offset
+            1 * IVEC2_
+            // Size
+            + 1 * IVEC2_
+            // Tiles (at least one...)
+            + num_tiles.max(1) * TILE_
+        )
     }
 
     #[allow(clippy::identity_op)]

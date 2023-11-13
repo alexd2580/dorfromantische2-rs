@@ -231,8 +231,11 @@ bool is_within_form(vec2 pos, int form) {
         }
         case FORM_SIZE4:
             return pos.x > -0.35;
-        case FORM_FAN_OUT:
-            return sqr_dist_of(vec2(abs(pos.x), pos.y), vec2(1.5, COS_30)) > single_outer;
+        case FORM_FAN_OUT: {
+            float sqr_dist_tl = sqr_dist_of(pos, vec2(-1.5, COS_30));
+            float sqr_dist_b = sqr_dist_of(pos, vec2(0, -2 * COS_30));
+            return sqr_dist_tl > single_outer && sqr_dist_b > single_outer;
+        }
         case FORM_X: {
             float sqr_dist_tl = sqr_dist_of(pos, vec2(-1.5, COS_30));
             float sqr_dist_br = sqr_dist_of(pos, vec2(1.5, -COS_30));
