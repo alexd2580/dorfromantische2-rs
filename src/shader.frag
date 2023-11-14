@@ -1,15 +1,15 @@
 #version 460
 
-#define MISSING_SEGMENT (-1)
-#define EMPTY_SEGMENT 0
-#define HOUSE_SEGMENT 1
-#define FOREST_SEGMENT 2
-#define WHEAT_SEGMENT 3
-#define RAIL_SEGMENT 4
-#define RIVER_SEGMENT 5
-#define LAKE_SEGMENT 6
-#define RAIL_STATION_SEGMENT 7
-#define LAKE_STATION_SEGMENT 8
+#define TERRAIN_MISSING 0
+#define TERRAIN_EMPTY 1
+#define TERRAIN_VILLAGE 2
+#define TERRAIN_FOREST 3
+#define TERRAIN_FIELD 4
+#define TERRAIN_RAIL 5
+#define TERRAIN_RIVER 6
+#define TERRAIN_LAKE 7
+#define TERRAIN_RAIL_STATION 8
+#define TERRAIN_LAKE_STATION 9
 
 #define FORM_SIZE1 0
 #define FORM_SIZE2 1
@@ -38,21 +38,42 @@
 #define HIGHLIGHT_HOVERED_GROUP 1
 #define HIGHLIGHT_OPEN_GROUPS 2
 
-#define GROUP_IS_CLOSED (2 << 30)
-
 /**
  * For reference on shader block layout see:
  * https://registry.khronos.org/OpenGL/specs/gl/glspec45.core.pdf#page=159
  */
 struct Tile {
     /**
-     * Interleaved;
-     * - terrain (enum value); 0 means none
-     * - form (enum value)
-     * - rotation (int)
-     * - group (int)
+     * See `inflate_segment` for reference:
+     * - terrain: 0-9 => 4 bit
+     * - form: 0-16 => 5 bit
+     * - rotation: 0-5 => 3 bit
+     * - group is closed: bool => 1 bit
+     * - group: => 19 bit
+     * Due to an a bug in wgpu/friends which assume that structs are
+     * std140-aligned, we need to do packing the ugly way if we want to reduce
+     * the memory footprint. This is not particularly bad, because per
+     * invocation we do the unpacking only once.
+     * `segments_4` holds the first 4 segments, `segments_2` the latter two.
+     * See `unpack_segment` for more info.
      */
-    ivec4 segments[6];
+    uvec4 segments_4;
+    uvec2 segments_2;
+    uvec2 data;
+};
+
+// Segment struct for internal use.
+struct Segment {
+    // See `TERRAIN_*` defines above.
+    uint terrain;
+    // See `FORM_*` defines above.
+    uint form;
+    // Clockwise rotation.
+    uint rotation;
+    // Whether the group is closed.
+    bool group_is_closed;
+    // Assigned group.
+    uint group;
 };
 
 in vec2 uv;
@@ -128,53 +149,80 @@ ivec2 grid_coords_at(vec2 pos) {
     return prelim + ivec2(xc - xyc, xyc);
 }
 
-int tile_index(ivec2 st) {
+uint unpack_segment(Tile tile, uint segment_id) {
+    switch(segment_id) {
+        case 0: return tile.segments_4.x;
+        case 1: return tile.segments_4.y;
+        case 2: return tile.segments_4.z;
+        case 3: return tile.segments_4.w;
+        case 4: return tile.segments_2.x;
+        case 5: return tile.segments_2.y;
+    }
+    return uint(0);
+}
+
+Segment inflate_segment(uint segment) {
+    // bits 0-3 // 4 bytes
+    uint terrain = segment & 0x0F;
+    // bits 4-8 // skip 4 take 5
+    uint form = (segment & (0x1F << 4)) >> 4;
+    // bits 9-11 // skip 9 take 3
+    uint rotation = (segment & (0x07 << 9)) >> 9;
+    // bit 12 // skip 12 take 1
+    bool group_is_closed = (segment & (0x01 << 12)) != 0;
+    // bits 13-32 // skip 13
+    uint group = (segment & (0x07FFFF << 13)) >> 13;
+
+    return Segment(terrain, form, rotation, group_is_closed, group);
+}
+
+uint tile_id_at(ivec2 st) {
     bool violates_s = st.s < index_offset.s || st.s >= index_offset.s + index_size.s;
     bool violates_t = st.t < index_offset.t || st.t >= index_offset.t + index_size.t;
     if (violates_s || violates_t) {
-        return -1;
+        return uint(1) << 31;
     }
 
-    return (st.t - index_offset.t) * index_size.s + (st.s - index_offset.s);
+    return uint((st.t - index_offset.t) * index_size.s + (st.s - index_offset.s));
 }
 
-vec3 color_of_group(int group, float offset) {
+vec3 color_of_group(uint group, float offset) {
     return 0.5 * vec3(sin(group * 0.298347 + offset), cos(group * 0.7834658 + offset), sin(group * 0.123798534 + offset)) + 0.5;
 }
 
-vec3 color_of_terrain(int terrain) {
+vec3 color_of_terrain(uint terrain) {
     switch (terrain) {
-    case EMPTY_SEGMENT:
+    case TERRAIN_EMPTY:
         return vec3(0.2);
-    case HOUSE_SEGMENT:
+    case TERRAIN_VILLAGE:
         return vec3(0.7, 0.4, 0.4);
-    case FOREST_SEGMENT:
+    case TERRAIN_FOREST:
         return vec3(0.5, 0.3, 0.2);
-    case WHEAT_SEGMENT:
+    case TERRAIN_FIELD:
         return vec3(1, 1, 0);
-    case RAIL_SEGMENT:
+    case TERRAIN_RAIL:
         return vec3(0.8);
-    case RIVER_SEGMENT:
+    case TERRAIN_RIVER:
         return vec3(0, 0, 1);
-    case LAKE_SEGMENT:
+    case TERRAIN_LAKE:
         return vec3(0.2, 0.2, 1);
-    case RAIL_STATION_SEGMENT:
-    case LAKE_STATION_SEGMENT:
+    case TERRAIN_RAIL_STATION:
+    case TERRAIN_LAKE_STATION:
         return vec3(0.5, 0.5, 1);
     default:
         return vec3(1, 0, 1);
     }
 }
 
-vec3 color_of_texture(int terrain, vec2 uv) {
+vec3 color_of_texture(uint terrain, vec2 uv) {
     switch (terrain) {
-    case FOREST_SEGMENT:
+    case TERRAIN_FOREST:
         return textureLod(sampler2D(forest_texture, texture_sampler), uv, 1.0).xyz;
-    case HOUSE_SEGMENT:
+    case TERRAIN_VILLAGE:
         return textureLod(sampler2D(city_texture, texture_sampler), uv, 1.0).xyz;
-    case WHEAT_SEGMENT:
+    case TERRAIN_FIELD:
         return textureLod(sampler2D(wheat_texture, texture_sampler), uv, 1.0).xyz;
-    case RIVER_SEGMENT:
+    case TERRAIN_RIVER:
         return textureLod(sampler2D(river_texture, texture_sampler), uv, 1.0).xyz;
     default:
         return color_of_terrain(terrain);
@@ -195,7 +243,7 @@ const float single_outer = 1.15 * 1.15;
 const float double_inner = 0.85 * 0.85;
 const float triple_inner = 1.85 * 1.85;
 
-bool is_within_form(vec2 pos, int form) {
+bool is_within_form(vec2 pos, uint form) {
     // if (pos.y > abs(pos.x * 2 * cos_30)) {
     //     return true;
     // }
@@ -274,14 +322,14 @@ void main() {
     }
 
     // Load tile info.
-    int index = tile_index(st);
-    // Tile index is outside range. It's empty there.
-    if (index == -1) {
+    uint tile_id = tile_id_at(st);
+    // Tile is outside range. It's empty there.
+    if (tile_id == (uint(1) << 31)) {
         frag_data = vec4(0, 0, 0, 1);
         return;
     }
 
-    Tile tile = tiles[index];
+    Tile tile = tiles[tile_id];
 
     vec2 center = center_coords_of(st);
     vec2 offset = coords - center;
@@ -294,22 +342,21 @@ void main() {
     }
 
     vec3 color = vec3(0.2);
-    for (int i = 0; i < 6; i++) {
-        int terrain = tile.segments[i].x;
+    for (uint segment_id = 0; segment_id < 6; segment_id++) {
+        Segment segment = inflate_segment(unpack_segment(tile, segment_id));
 
         // The segment and the entire tile is empty.
-        if (terrain == MISSING_SEGMENT) {
+        if (segment.terrain == TERRAIN_MISSING) {
             color = vec3(0.0);
             break;
         }
 
         // This segment and all following segments are empty.
-        if (terrain == EMPTY_SEGMENT) {
+        if (segment.terrain == TERRAIN_EMPTY) {
             break;
         }
 
-        int rotation = tile.segments[i].z;
-        float angle = rotation * 2 * DEG_30;
+        float angle = segment.rotation * 2 * DEG_30;
         float c = cos(angle);
         float s = sin(angle);
         vec2 pos = vec2(
@@ -317,31 +364,28 @@ void main() {
             s * offset.x + c * offset.y
         );
 
-        int form = tile.segments[i].y;
-        int group_bytes = tile.segments[i].w;
-        int group = group_bytes & ~GROUP_IS_CLOSED;
-        bool group_is_closed = (group_bytes & GROUP_IS_CLOSED) != 0;
-        if (is_within_form(pos, form)) {
+        if (is_within_form(pos, segment.form)) {
             switch (coloring) {
             case COLOR_BY_TERRAIN:
-                color = color_of_terrain(terrain);
+                color = color_of_terrain(segment.terrain);
                 break;
             case COLOR_BY_GROUP_STATIC:
-                color = color_of_group(group, 0.0);
+                color = color_of_group(segment.group, 0.0);
                 break;
             case COLOR_BY_GROUP_DYNAMIC:
-                color = color_of_group(group, 2 * time);
+                color = color_of_group(segment.group, 2 * time);
                 break;
             case COLOR_BY_TEXTURE:
-                color = color_of_texture(terrain, -0.1 * coords);
+                color = color_of_texture(segment.terrain, -0.1 * coords);
                 break;
             }
 
             bool highlight_hovered = (highlight_flags & HIGHLIGHT_HOVERED_GROUP) != 0;
             bool highlight_open = (highlight_flags & HIGHLIGHT_OPEN_GROUPS) != 0; // TODO bug here.
-            if (highlight_hovered && hover_group != -1 && hover_group != group) {
+
+            if (highlight_hovered && hover_group != -1 && hover_group != segment.group) {
                 color *= 0.1;
-            } else if (highlight_open && group_is_closed) {
+            } else if (highlight_open && segment.group_is_closed) {
                 color *= 0.1;
             }
 

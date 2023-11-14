@@ -11,8 +11,6 @@ pub const _VEC3_: usize = 3 * FLOAT_ + PAD_;
 pub const IVEC2_: usize = 2 * INT_;
 pub const IVEC4_: usize = 4 * INT_;
 
-pub const TILE_: usize = 6 * IVEC4_;
-
 #[derive(Clone, Copy, Debug)]
 pub enum Form {
     Size1 = 0,
@@ -62,16 +60,16 @@ impl From<&raw_data::SegmentTypeId> for Form {
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Terrain {
-    Missing = -1,
-    Empty = 0,
-    House = 1,
-    Forest = 2,
-    Wheat = 3,
-    Rail = 4,
-    River = 5,
-    Lake = 6,
-    RailStation = 7,
-    LakeStation = 8,
+    Missing = 0,
+    Empty = 1,
+    House = 2,
+    Forest = 3,
+    Wheat = 4,
+    Rail = 5,
+    River = 6,
+    Lake = 7,
+    RailStation = 8,
+    LakeStation = 9,
 }
 
 impl Terrain {
@@ -724,7 +722,6 @@ fn segments_from_quest_id(pos: IVec2, quest_tile_id: QuestTileId) -> Vec<Segment
         _ => {
             println!("{}\t{}\t=> {}", pos.x, pos.y, quest_tile_id.0);
             todo!();
-            unreachable!()
         }
     }
 }
@@ -765,7 +762,7 @@ impl From<&raw_data::Tile> for Tile {
 
         // Apply tile rotation.
         segments.iter_mut().for_each(|segment| {
-            segment.rotation += usize::try_from(value.rotation).unwrap();
+            segment.rotation = (segment.rotation + usize::try_from(value.rotation).unwrap()) % 6;
         });
 
         // Compute parts.

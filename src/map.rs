@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    data::{Rotation, SegmentId, Terrain, Tile, TileId, IVEC2_, TILE_},
+    data::{Rotation, SegmentId, Terrain, Tile, TileId, IVEC2_, IVEC4_},
     index::Index,
     raw_data,
 };
@@ -108,6 +108,8 @@ impl From<&raw_data::SaveGame> for Map {
         map
     }
 }
+
+const TILE_: usize = IVEC4_ + IVEC2_ + IVEC2_;
 
 impl Map {
     // pub fn tiles(&self) -> &[Tile] {
@@ -297,7 +299,6 @@ impl Map {
         )
     }
 
-    #[allow(clippy::identity_op)]
     pub unsafe fn write_to(&self, ptr: *mut u8) {
         let iptr = ptr.cast::<i32>();
 
@@ -309,26 +310,28 @@ impl Map {
 
         let bptr = iptr.add(4).cast::<u8>();
         for (index, maybe_tile_id) in self.index.index_data().iter().enumerate() {
-            let tptr = bptr.add(index * TILE_).cast::<i32>();
+            let tptr = bptr.add(index * TILE_).cast::<u32>();
 
             if let &Some(tile_id) = maybe_tile_id {
+                // Tile exists.
                 let segments = &self.tile(tile_id).segments;
                 for (segment_id, segment) in segments.iter().enumerate() {
-                    *tptr.add(segment_id * 4 + 0) = segment.terrain as i32;
-                    *tptr.add(segment_id * 4 + 1) = segment.form as i32;
-                    *tptr.add(segment_id * 4 + 2) = segment.rotation as i32; // TODO better primitive types.
-
                     let group = self.group_of(tile_id, segment_id);
-                    let is_closed = self.groups[group].open_edges.is_empty();
-                    let group_bytes = group as i32 | if is_closed { 2 << 30 } else { 0 };
+                    let is_closed = self.groups[group].open_edges.is_empty() as u32;
 
-                    *tptr.add(segment_id * 4 + 3) = group_bytes;
+                    // Each segment is a uint32.
+                    *tptr.add(segment_id) = segment.terrain as u32
+                        | (segment.form as u32) << 4
+                        | (segment.rotation as u32) << 9
+                        | is_closed << 12
+                        | (group as u32) << 13;
                 }
                 if segments.len() < 6 {
-                    *tptr.add(segments.len() * 4 + 0) = Terrain::Empty as i32;
+                    *tptr.add(segments.len()) = Terrain::Empty as u32;
                 }
             } else {
-                *tptr = Terrain::Missing as i32;
+                // Tile doesn't exist.
+                *tptr = Terrain::Missing as u32;
             }
         }
     }
