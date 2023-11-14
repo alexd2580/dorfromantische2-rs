@@ -822,21 +822,18 @@ fn run(
                                             ui.label("Segments");
                                             ui.end_row();
 
+                                            ui.label("Terrain");
+                                            ui.label("Form");
+                                            ui.label("Group");
+                                            ui.end_row();
+
                                             for (segment_id, segment) in
                                                 tile.segments.iter().enumerate()
                                             {
-                                                ui.label("Terrain");
-                                                ui.label(format!(
-                                                    "{:?} {:?}",
-                                                    segment.terrain, segment.form
-                                                ));
-                                                ui.end_row();
-
-                                                ui.label("Group");
-                                                ui.label(format!(
-                                                    "{}",
-                                                    app.map.group_of(tile_id, segment_id)
-                                                ));
+                                                ui.label(format!("{:?}", segment.terrain));
+                                                ui.label(format!("{:?}", segment.form));
+                                                let group = app.map.group_of(tile_id, segment_id);
+                                                ui.label(format!("{group}",));
                                                 ui.end_row();
                                             }
                                         }
