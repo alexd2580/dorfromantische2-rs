@@ -1,6 +1,6 @@
 use glam::IVec2;
 
-use crate::raw_data;
+use crate::raw_data::{self, QuestTileId};
 
 pub const PAD_: usize = 4;
 pub const _BOOL_: usize = 4;
@@ -248,6 +248,8 @@ pub struct Tile {
     pub pos: IVec2,
     pub segments: Vec<Segment>,
     pub parts: [Terrain; 6],
+
+    pub quest_tile: Option<usize>,
 }
 
 impl Default for Tile {
@@ -256,42 +258,517 @@ impl Default for Tile {
             pos: IVec2::ZERO,
             segments: Default::default(),
             parts: [Terrain::Missing; 6],
+            quest_tile: None,
+        }
+    }
+}
+
+fn segments_from_quest_id(pos: IVec2, quest_tile_id: QuestTileId) -> Vec<Segment> {
+    match quest_tile_id.0 {
+        // Wheat
+        // 2AA_4AF (Normal,  BigTree, Granary, Windmill)
+        2 | 3 | 4 | 5 => vec![
+            Segment {
+                form: Form::Size2,
+                terrain: Terrain::Wheat,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size4,
+                terrain: Terrain::Forest,
+                rotation: 2,
+            },
+        ],
+        // 2AA
+        92 => vec![Segment {
+            form: Form::Size2,
+            terrain: Terrain::Wheat,
+            rotation: 0,
+        }],
+        // 2AA_2AV_1AV TODO?
+        1 => vec![
+            Segment {
+                form: Form::Size2,
+                terrain: Terrain::Wheat,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size2,
+                terrain: Terrain::House,
+                rotation: 2,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::House,
+                rotation: 5,
+            },
+        ],
+        // 3AA_1AV (Normal, Granary, Windmill)
+        6 | 7 | 8 => vec![
+            Segment {
+                form: Form::Size3,
+                terrain: Terrain::Wheat,
+                rotation: 3,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::House,
+                rotation: 0,
+            },
+        ],
+        // 4AA_2AF (Normal, Granary)
+        9 | 10 => vec![
+            Segment {
+                form: Form::Size4,
+                terrain: Terrain::Wheat,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size2,
+                terrain: Terrain::Forest,
+                rotation: 4,
+            },
+        ],
+        // 4BA_1AF_1AF (Normal, BigTree)
+        11 | 12 => vec![
+            Segment {
+                form: Form::X,
+                terrain: Terrain::Wheat,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::Forest,
+                rotation: 2,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::Forest,
+                rotation: 5,
+            },
+        ],
+        // 6AA (Normal, BigTree, Windmill)
+        13 | 14 | 15 => vec![Segment {
+            form: Form::Size6,
+            terrain: Terrain::Wheat,
+            rotation: 0,
+        }],
+
+        // Forest
+        // 1AF (Normal, Dear, Bear, Boar)
+        16 | 19 | 65 | 66 => vec![Segment {
+            form: Form::Size1,
+            terrain: Terrain::Forest,
+            rotation: 0,
+        }],
+        // 2AF (Normal, Dear, Bear, Boar)
+        67 | 68 | 69 | 70 => vec![Segment {
+            form: Form::Size2,
+            terrain: Terrain::Forest,
+            rotation: 0,
+        }],
+        // 3AF (Normal, Dear, Bear, Boar)
+        20 | 21 | 71 | 72 => vec![Segment {
+            form: Form::Size3,
+            terrain: Terrain::Forest,
+            rotation: 0,
+        }],
+        // 4AF (Normal, Ruin)
+        22 | 73 => vec![Segment {
+            form: Form::Size4,
+            terrain: Terrain::Forest,
+            rotation: 0,
+        }],
+        // 6AF (Normal, Deer, Bear, Boar, Ruin)
+        23 | 24 | 74 | 75 | 76 => vec![Segment {
+            form: Form::Size6,
+            terrain: Terrain::Forest,
+            rotation: 0,
+        }],
+        // 1AF_2AW (Normal, Deer) TODO?
+        17 | 18 => vec![
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::Forest,
+                rotation: 3,
+            },
+            Segment {
+                form: Form::Size2,
+                terrain: Terrain::Lake,
+                rotation: 0,
+            },
+        ],
+
+        // Village
+        // 2AV
+        33 => vec![Segment {
+            form: Form::Size2,
+            terrain: Terrain::House,
+            rotation: 0,
+        }],
+        // 3AV (Normal, Fountain)
+        35 | 38 => vec![Segment {
+            form: Form::Size3,
+            terrain: Terrain::House,
+            rotation: 0,
+        }],
+        // 3AV_3AF (Normal, Fountain, Tower, Fox)
+        34 | 36 | 37 | 80 => vec![
+            Segment {
+                form: Form::Size3,
+                terrain: Terrain::House,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size3,
+                terrain: Terrain::Forest,
+                rotation: 3,
+            },
+        ],
+        // 4BV_1AF_1AF (Notmal, Fountain, Tower, Fox)
+        39 | 40 | 41 | 84 => vec![
+            Segment {
+                form: Form::FanOut,
+                terrain: Terrain::House,
+                rotation: 4,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::Forest,
+                rotation: 1,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::Forest,
+                rotation: 3,
+            },
+        ],
+        // 4AV_1AF_1AF
+        // 81 => todo!(),
+        // 4AV_2AA (Normal, Fox)
+        // 82 | 83 => todo!(),
+        // 5AV_1AF (Normal, Fox)
+        85 | 86 => vec![
+            Segment {
+                form: Form::Size5,
+                terrain: Terrain::House,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::Forest,
+                rotation: 5,
+            },
+        ],
+        // 6AV (Normal, Fountain, Tower)
+        42 | 43 | 44 => vec![Segment {
+            form: Form::Size6,
+            terrain: Terrain::House,
+            rotation: 0,
+        }],
+
+        // Train
+        // 2BT_3AA_1AA TODO?
+        25 => vec![
+            Segment {
+                form: Form::Bridge,
+                terrain: Terrain::Rail,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::Wheat,
+                rotation: 1,
+            },
+            Segment {
+                form: Form::Size3,
+                terrain: Terrain::Wheat,
+                rotation: 3,
+            },
+        ],
+        // 2BT_3AF_1AF
+        26 => vec![
+            Segment {
+                form: Form::Bridge,
+                terrain: Terrain::Rail,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::Forest,
+                rotation: 1,
+            },
+            Segment {
+                form: Form::Size3,
+                terrain: Terrain::Forest,
+                rotation: 3,
+            },
+        ],
+        // 2BT_3AV_1AV
+        27 => vec![
+            Segment {
+                form: Form::Bridge,
+                terrain: Terrain::Rail,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::House,
+                rotation: 1,
+            },
+            Segment {
+                form: Form::Size3,
+                terrain: Terrain::House,
+                rotation: 3,
+            },
+        ],
+        // 2CT_1AF_1AV (Normal, Locomotive)
+        28 | 29 => vec![
+            Segment {
+                form: Form::Straight,
+                terrain: Terrain::Rail,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::Forest,
+                rotation: 1,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::House,
+                rotation: 4,
+            },
+        ],
+        // 2CT (Normal, Locomotive)
+        30 | 31 => vec![Segment {
+            form: Form::Straight,
+            terrain: Terrain::Rail,
+            rotation: 0,
+        }],
+        // 32 => todo!(), // 4CT_1AF_1AF
+
+        // Water
+        // 2BW_3AF_1AF (Normal, Boat) TODO?
+        45 | 46 => vec![
+            Segment {
+                form: Form::Bridge,
+                terrain: Terrain::River,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::Forest,
+                rotation: 1,
+            },
+            Segment {
+                form: Form::Size3,
+                terrain: Terrain::Forest,
+                rotation: 3,
+            },
+        ],
+        // 2CW (Normal, Boat, Beaver)
+        47 | 54 | 58 => {
+            vec![Segment {
+                form: Form::Straight,
+                terrain: Terrain::River,
+                rotation: 0,
+            }]
+        }
+
+        // 2CW_2AA_1AV (Normal, Watermill) // Very weird tile...
+        49 | 50 => vec![
+            Segment {
+                form: Form::Straight,
+                terrain: Terrain::River,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size2,
+                terrain: Terrain::Wheat,
+                rotation: 1,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::House,
+                rotation: 5,
+            },
+        ],
+        // 2CW_2AF_1AA (Normal, Watermill)
+        51 | 52 => vec![
+            Segment {
+                form: Form::Straight,
+                terrain: Terrain::River,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size2,
+                terrain: Terrain::Forest,
+                rotation: 1,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::Wheat,
+                rotation: 4,
+            },
+        ],
+        // 2CW_2AF_2AA (Normal, Beaver)
+        87 | 88 => vec![
+            Segment {
+                form: Form::Straight,
+                terrain: Terrain::River,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size2,
+                terrain: Terrain::Forest,
+                rotation: 1,
+            },
+            Segment {
+                form: Form::Size2,
+                terrain: Terrain::Wheat,
+                rotation: 4,
+            },
+        ],
+        // 2CW_2AV_1AV
+        48 => vec![
+            Segment {
+                form: Form::Straight,
+                terrain: Terrain::River,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size2,
+                terrain: Terrain::House,
+                rotation: 1,
+            },
+            Segment {
+                form: Form::Size1,
+                terrain: Terrain::House,
+                rotation: 5,
+            },
+        ],
+        // 2CW_2AV_2AV_Watermill TODO? more weird tiles....
+        53 => vec![
+            Segment {
+                form: Form::Straight,
+                terrain: Terrain::River,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size2,
+                terrain: Terrain::House,
+                rotation: 1,
+            },
+            Segment {
+                form: Form::Size2,
+                terrain: Terrain::House,
+                rotation: 4,
+            },
+        ],
+        // 3AW_3AF (Normal, SwanGoose, Beaver)
+        59 | 89 | 60 => vec![
+            Segment {
+                form: Form::Size3,
+                terrain: Terrain::Lake,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size3,
+                terrain: Terrain::Forest,
+                rotation: 3,
+            },
+        ],
+
+        // 4AW_2AF (Normal, Beaver, SwanGoose)
+        61 | 62 | 90 => vec![
+            Segment {
+                form: Form::Size4,
+                terrain: Terrain::Lake,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size2,
+                terrain: Terrain::Forest,
+                rotation: 4,
+            },
+        ],
+        // 6AW (Normal, Beaver, Ruin, Boat, SwanGoose)
+        55 | 63 | 64 | 56 | 91 => vec![Segment {
+            form: Form::Size6,
+            terrain: Terrain::Lake,
+            rotation: 0,
+        }],
+
+        // WaterTrainStation
+        // 6AW_6AT
+        57 => vec![
+            Segment {
+                form: Form::Size6,
+                terrain: Terrain::LakeStation,
+                rotation: 0,
+            },
+            Segment {
+                form: Form::Size6,
+                terrain: Terrain::RailStation,
+                rotation: 0,
+            },
+        ],
+
+        // Tutorial
+        // 77 => todo!(), // Tutorial_Agriculture_6AA
+        // 78 => todo!(), // Tutorial_Agriculture_6AA_Windmill
+        // 79 => todo!(), // Tutorial_Village_2AV
+
+        // 0 => todo!(), // Undefined
+        _ => {
+            println!("{}\t{}\t=> {}", pos.x, pos.y, quest_tile_id.0);
+            todo!();
+            unreachable!()
         }
     }
 }
 
 impl From<&raw_data::Tile> for Tile {
     fn from(value: &raw_data::Tile) -> Self {
+        // Hex grid tutorial:
+        // https://www.redblobgames.com/grids/hexagons/#line-drawing
+        let pos = IVec2::new(value.s, value.t - ((value.s + 1) & -2i32) / 2);
+
         let special = value.special_tile_id.0;
-        let mut segments = value
-            .segments
-            .iter()
-            .map(|segment| {
-                let mut segment = Segment::from(segment);
-                segment.rotation += usize::try_from(value.rotation).unwrap();
-                segment
-            })
-            .collect();
+        let quest_tile = value.quest_tile.as_ref().map(|x| x.quest_tile_id.clone());
 
-        match special {
-            0 => {}
-            1 => {
-                segments = vec![
-                    Segment {
-                        form: Form::Size6,
-                        terrain: Terrain::RailStation,
-                        rotation: 0,
-                    },
-                    Segment {
-                        form: Form::Size6,
-                        terrain: Terrain::LakeStation,
-                        rotation: 0,
-                    },
-                ]
+        // Build segments.
+        let mut segments = if let Some(quest_id) = &quest_tile {
+            segments_from_quest_id(pos, quest_id.clone())
+        } else if special != 0 {
+            match special {
+                1 => {
+                    vec![
+                        Segment {
+                            form: Form::Size6,
+                            terrain: Terrain::RailStation,
+                            rotation: 0,
+                        },
+                        Segment {
+                            form: Form::Size6,
+                            terrain: Terrain::LakeStation,
+                            rotation: 0,
+                        },
+                    ]
+                }
+                _ => unreachable!(),
             }
-            _ => unreachable!(),
-        }
+        } else {
+            value.segments.iter().map(Segment::from).collect()
+        };
 
+        // Apply tile rotation.
+        segments.iter_mut().for_each(|segment| {
+            segment.rotation += usize::try_from(value.rotation).unwrap();
+        });
+
+        // Compute parts.
         let parts = [0, 1, 2, 3, 4, 5].map(|rotation| {
             segments
                 .iter()
@@ -300,13 +777,11 @@ impl From<&raw_data::Tile> for Tile {
                 .unwrap_or(Terrain::Empty)
         });
 
-        // Hex grid tutorial:
-        // https://www.redblobgames.com/grids/hexagons/#line-drawing
-        let pos = IVec2::new(value.s, value.t - ((value.s + 1) & -2i32) / 2);
         Self {
             pos,
             segments,
             parts,
+            quest_tile: quest_tile.map(|x| x.0 as usize),
         }
     }
 }
@@ -368,6 +843,7 @@ impl Tile {
                 })
                 .collect(),
             parts: [0, 1, 2, 3, 4, 5].map(|index| self.parts[(index + rotation) % 6]),
+            quest_tile: self.quest_tile.clone(),
         }
     }
 }

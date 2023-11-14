@@ -330,7 +330,7 @@ impl TryFrom<&Value> for GameModeId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct QuestTileId(pub i32);
 
 impl TryFrom<&Value> for QuestTileId {

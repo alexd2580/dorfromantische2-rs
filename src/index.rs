@@ -54,9 +54,11 @@ impl Index {
             },
         );
 
-        let size = max - min + IVec2::new(1, 1);
+        let lower = min - IVec2::ONE;
+        let upper = max + IVec2::ONE;
+        let size = upper - lower + IVec2::ONE;
         let mut index = Self {
-            offset: min,
+            offset: lower,
             size,
             index: vec![None; usize::try_from(size.x * size.y).unwrap()],
         };

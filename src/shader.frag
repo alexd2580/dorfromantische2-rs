@@ -338,7 +338,7 @@ void main() {
             }
 
             bool highlight_hovered = (highlight_flags & HIGHLIGHT_HOVERED_GROUP) != 0;
-            bool highlight_open = (highlight_flags & HIGHLIGHT_OPEN_GROUPS) != 0;
+            bool highlight_open = (highlight_flags & HIGHLIGHT_OPEN_GROUPS) != 0; // TODO bug here.
             if (highlight_hovered && hover_group != -1 && hover_group != group) {
                 color *= 0.1;
             } else if (highlight_open && group_is_closed) {

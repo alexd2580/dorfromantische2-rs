@@ -39,6 +39,7 @@ impl Default for Map {
             pos: Default::default(),
             segments: vec![],
             parts: [Terrain::Empty; 6],
+            quest_tile: None,
         }];
         let index = Index::from(&tiles);
 
@@ -56,17 +57,18 @@ impl Default for Map {
 
 impl From<&raw_data::SaveGame> for Map {
     fn from(savegame: &raw_data::SaveGame) -> Self {
-        // let mut quest_tile_ids = HashSet::<i32>::default();
-        // let mut quest_ids = HashSet::<i32>::default();
-        //
-        // savegame.tiles.iter().filter(|tile| tile.quest_tile.is_some()).for_each(|tile| {
-        //     let q = tile.quest_tile.as_ref().unwrap();
-        //     quest_ids.insert(q.quest_id.0);
-        //     quest_tile_ids.insert(q.quest_tile_id.0);
-        // });
-        //
-        // dbg!(&quest_tile_ids);
-        // dbg!(&quest_ids);
+        let mut quest_tile_ids = HashSet::<i32>::default();
+        let mut quest_ids = HashSet::<i32>::default();
+
+        savegame
+            .tiles
+            .iter()
+            .filter(|tile| tile.quest_tile.is_some())
+            .for_each(|tile| {
+                let q = tile.quest_tile.as_ref().unwrap();
+                quest_ids.insert(q.quest_id.0);
+                quest_tile_ids.insert(q.quest_tile_id.0);
+            });
 
         // Prepend tiles list with empty tile (is this necessary when i start parsing special tiles?)
         let tiles = iter::once(Default::default())
@@ -108,9 +110,9 @@ impl From<&raw_data::SaveGame> for Map {
 }
 
 impl Map {
-    pub fn tiles(&self) -> &[Tile] {
-        &self.tiles
-    }
+    // pub fn tiles(&self) -> &[Tile] {
+    //     &self.tiles
+    // }
 
     pub fn best_placements(&self) -> &Vec<(IVec2, i32)> {
         &self.best_placements

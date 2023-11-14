@@ -349,6 +349,9 @@ struct App {
     hover_group: Option<GroupId>,
 
     // Ui.
+    goto_x: String,
+    goto_y: String,
+
     /// How to color segments (TODO change to enum).
     coloring: i32,
     /// Whether to highlight hovered groups.
@@ -483,6 +486,8 @@ impl App {
             hover_group: None,
 
             // Ui.
+            goto_x: String::new(),
+            goto_y: String::new(),
             coloring: 0,
             highlight_hovered_group: false,
             highlight_open_groups: true,
@@ -647,6 +652,15 @@ impl App {
             self.load_file(file, gpu);
         }
     }
+
+    fn submit_goto(&mut self) {
+        let x = self.goto_x.parse::<i32>();
+        let y = self.goto_y.parse::<i32>();
+        if let (Ok(x), Ok(y)) = (x, y) {
+            self.origin = Vec2::new(x as f32, y as f32);
+            self.inv_scale = 30.0;
+        }
+    }
 }
 
 fn run(
@@ -758,6 +772,16 @@ fn run(
                         sidebar_expanded,
                         |ui| {
                             ui.label("Visual settings");
+                            ui.horizontal(|ui| {
+                                ui.label("Goto");
+                                ui.text_edit_singleline(&mut app.goto_x);
+                                let response = ui.text_edit_singleline(&mut app.goto_y);
+                                if response.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                {
+                                    app.submit_goto();
+                                }
+                            });
                             ui.add(
                                 egui::Slider::new(&mut app.inv_scale, 5.0..=500.0).text("Zoom out"),
                             );
@@ -816,6 +840,10 @@ fn run(
                                                 ui.end_row();
                                             }
                                         }
+
+                                        ui.label("Quest");
+                                        ui.label(format!("{:?}", app.map.tile(tile_id).quest_tile));
+                                        ui.end_row();
                                     });
                                 });
 
