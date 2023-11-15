@@ -1,5 +1,7 @@
 # About
 
+![current snapshot](./snapshot.png)
+
 Prototype for evaluating the use of egui in a future project.
 Coincidentally, a dorfromantik solver, with savegame-load/watch ability.
 
@@ -11,7 +13,7 @@ steamapps/compatdata/*/pfx/drive_c/users/steamuser/AppData/LocalLow/Toukana\ Int
 [x] Document TODOs
 [x] Fix lints
 [ ] Split run function
-[ ] Add screenshot
+[x] Add screenshot
 [ ] Incremental reload (nrbf is going to be fun....)
 [ ] Decode preplaced tiles (the coordinate conversion is going to be fun)
 [ ] Compute probabilities for all tiles
