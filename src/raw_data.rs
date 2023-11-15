@@ -212,7 +212,7 @@ impl TryFrom<&Value> for Tile {
 
 #[allow(dead_code)]
 #[derive(Debug)]
-struct PreplacedTile {
+pub struct PreplacedTile {
     section_grid_pos_x: i32,
     section_grid_pos_y: i32,
     preplaced_tile_id: QuestTileId,
@@ -253,7 +253,7 @@ pub struct SaveGame {
     surrounded_tiles_count: i32,
     pub tiles: Vec<Tile>,
     pub tile_stack: Vec<Tile>,
-    preplaced_tiles: Vec<PreplacedTile>,
+    pub preplaced_tiles: Vec<PreplacedTile>,
     pending_locked_challenges: Vec<ChallengeId>,
     tile_stack_count: i32,
     file_name: Option<String>,

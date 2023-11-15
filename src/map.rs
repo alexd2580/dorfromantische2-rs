@@ -21,16 +21,26 @@ pub struct Group {
 }
 
 pub struct Map {
+    /// List of tiles in placement order, as read from the savegame.
     tiles: Vec<Tile>,
+    /// Index structure.
     index: Index,
 
+    /// Groups of segments on tiles.
     assigned_groups: HashMap<(TileId, SegmentId), GroupId>,
+    /// List of groups - which segments belong to them and what open edges they have.
     groups: Vec<Group>,
 
+    /// Probability/count of getting a tile. Tiles are canonicalized by converting the terrain enum
+    /// into int and choosing the lexicographically smallest rotation.
+    probabilities: HashMap<[Terrain; 6], (usize, f32)>,
+    /// Set of valid positions to place a tile.
     possible_placements: HashSet<IVec2>,
 
+    /// Next tile in the tile stack.
     next_tile: Option<Tile>,
-    best_placements: Vec<(IVec2, i32)>,
+    /// Placement choices, grouped by score.
+    best_placements: Vec<(i32, Vec<IVec2>)>,
 }
 
 impl Default for Map {
@@ -48,6 +58,7 @@ impl Default for Map {
             index,
             assigned_groups: Default::default(),
             groups: Default::default(),
+            probabilities: Default::default(),
             possible_placements: Default::default(),
             next_tile: Default::default(),
             best_placements: Default::default(),
@@ -59,6 +70,11 @@ impl From<&raw_data::SaveGame> for Map {
     fn from(savegame: &raw_data::SaveGame) -> Self {
         let mut quest_tile_ids = HashSet::<i32>::default();
         let mut quest_ids = HashSet::<i32>::default();
+
+        //     dbg!(&savegame.preplaced_tiles);
+        // int num = Mathf.RoundToInt(worldPos.x / (_tileSize.x * 0.75f));
+        // int y = Mathf.RoundToInt((worldPos.z + (float)Mathf.Abs(num % 2) * _tileSize.y / 2f) / _tileSize.y);
+        // return new Vector2Int(num, y);
 
         savegame
             .tiles
@@ -84,25 +100,27 @@ impl From<&raw_data::SaveGame> for Map {
             index,
             assigned_groups,
             groups,
+            probabilities: Default::default(),
             possible_placements,
             next_tile,
             best_placements: Default::default(),
         };
 
         let next_tile = map.next_tile.as_ref().unwrap();
-        let mut best_placements = map
-            .possible_placements
-            .iter()
-            .map(|pos| {
-                let score = (0..6)
-                    .map(|rotation| map.score_of(&next_tile.moved_to(*pos, rotation)))
-                    .max()
-                    .unwrap();
-                (*pos, score)
-            })
-            .collect::<Vec<_>>();
+        let mut best_placements = HashMap::<i32, Vec<IVec2>>::default();
+        for pos in &map.possible_placements {
+            let score = (0..6)
+                .map(|rotation| map.score_of(&next_tile.moved_to(*pos, rotation)))
+                .max()
+                .unwrap();
 
-        best_placements.sort_by_key(|elem| std::cmp::Reverse(elem.1));
+            let mut previous = best_placements.remove(&score).unwrap_or(vec![]);
+            previous.push(*pos);
+            best_placements.insert(score, previous);
+        }
+        let mut best_placements = best_placements.into_iter().collect::<Vec<_>>();
+        best_placements.sort_by_key(|elem| std::cmp::Reverse(elem.0));
+
         map.best_placements = best_placements;
 
         map
@@ -116,7 +134,7 @@ impl Map {
     //     &self.tiles
     // }
 
-    pub fn best_placements(&self) -> &Vec<(IVec2, i32)> {
+    pub fn best_placements(&self) -> &Vec<(i32, Vec<IVec2>)> {
         &self.best_placements
     }
 
@@ -332,6 +350,15 @@ impl Map {
             } else {
                 // Tile doesn't exist.
                 *tptr = Terrain::Missing as u32;
+                *tptr.add(6) = 0;
+            }
+        }
+
+        for (score, positions) in &self.best_placements {
+            for pos in positions {
+                let index = self.index.tile_key(*pos).unwrap();
+                let tptr = bptr.add(index * TILE_).cast::<i32>();
+                *tptr.add(6) = *score;
             }
         }
     }

@@ -59,7 +59,8 @@ struct Tile {
      */
     uvec4 segments_4;
     uvec2 segments_2;
-    uvec2 data;
+    int placement_score;
+    int pad_;
 };
 
 // Segment struct for internal use.
@@ -107,9 +108,7 @@ layout(std140, binding=0) uniform View {
     int coloring;
     int highlight_flags;
 
-    ivec2 gold;
-    ivec2 silver;
-    ivec2 bronze;
+    uint show_score_flags;
 };
 
 layout(std140, binding=1) readonly buffer Tiles {
@@ -303,23 +302,27 @@ bool is_within_form(vec2 pos, uint form) {
     }
 }
 
+vec3 color_of_score(int score) {
+    if ((show_score_flags & (uint(1) << score)) == 0) {
+        return vec3(0);
+    }
+
+    float twice_per_sec = 0.5 * sin(2 * 2 * PI * time) + 0.5;
+    switch (score) {
+        case 6: return twice_per_sec * vec3(0.9, 0.85, 0);
+        case 5: return twice_per_sec * vec3(0.85);
+        case 4: return twice_per_sec * vec3(0.8, 0.5, 0.2);
+        case 3: return twice_per_sec * vec3(0, 1, 0);
+        case 2: return twice_per_sec * vec3(0, 0, 1);
+        case 1: return twice_per_sec * vec3(1, 0, 0);
+        // case 0: return twice_per_sec * vec3(0.5);
+    }
+    return vec3(0);
+}
+
 void main() {
     vec2 coords = origin + vec2(uv.s * aspect_ratio, uv.t) * 0.5 * inv_scale;
     ivec2 st = grid_coords_at(coords);
-
-    float twice_per_sec = 0.5 * sin(2 * 2 * PI * time) + 0.5;
-    if (st == gold) {
-        frag_data = vec4(twice_per_sec * vec3(0.9, 0.85, 0), 1);
-        return;
-    }
-    if (st == silver) {
-        frag_data = vec4(twice_per_sec * vec3(0.85), 1);
-        return;
-    }
-    if (st == bronze) {
-        frag_data = vec4(twice_per_sec * vec3(0.8, 0.5, 0.2), 1);
-        return;
-    }
 
     // Load tile info.
     uint tile_id = tile_id_at(st);
@@ -347,7 +350,7 @@ void main() {
 
         // The segment and the entire tile is empty.
         if (segment.terrain == TERRAIN_MISSING) {
-            color = vec3(0.0);
+            color = color_of_score(tile.placement_score);
             break;
         }
 

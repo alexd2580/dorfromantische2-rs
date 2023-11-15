@@ -2,7 +2,8 @@ use data::{Rotation, TileId};
 use glam::{IVec2, UVec2, Vec2};
 use gpu::{Buffer, Gpu, SizeOrContent};
 use map::{GroupId, Map};
-use std::{borrow::Cow, fs::File, path::PathBuf, thread::JoinHandle, time::SystemTime};
+use pipeline::Pipeline;
+use std::{fs::File, path::PathBuf, thread::JoinHandle, time::SystemTime};
 use textures::Textures;
 use winit::{
     dpi::PhysicalPosition,
@@ -14,181 +15,38 @@ mod data;
 mod gpu;
 mod index;
 mod map;
+mod pipeline;
 mod raw_data;
 mod textures;
 
 struct Ui {
     context: egui::Context,
     state: egui_winit::State,
-    screen_descriptor: egui_wgpu::renderer::ScreenDescriptor,
 }
 
 impl Ui {
     fn new(window: &Window) -> Self {
-        let size = window.inner_size();
         Self {
             context: Default::default(),
             state: egui_winit::State::new(window),
-            screen_descriptor: egui_wgpu::renderer::ScreenDescriptor {
-                size_in_pixels: [size.width, size.height],
-                pixels_per_point: 1.0,
-            },
         }
-    }
-
-    fn resize(&mut self, width: u32, height: u32) {
-        self.screen_descriptor.size_in_pixels = [width, height];
     }
 
     fn on_event(&mut self, event: &WindowEvent) -> egui_winit::EventResponse {
         self.state.on_event(&self.context, event)
     }
 
-    fn run(&mut self, window: &Window, run_ui: impl FnOnce(&egui::Context)) -> egui::FullOutput {
-        self.context.run(self.state.take_egui_input(window), run_ui)
-    }
-}
-
-struct Pipeline {
-    _pipeline_layout: wgpu::PipelineLayout,
-    render_pipeline: wgpu::RenderPipeline,
-
-    egui_renderer: egui_wgpu::Renderer,
-}
-
-impl Pipeline {
-    fn new(gpu: &Gpu, bind_group_layouts: &[wgpu::BindGroupLayout]) -> Self {
-        // Load the shaders from disk
-        let vertex_shader = gpu
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("vertex_shader"),
-                source: wgpu::ShaderSource::Glsl {
-                    shader: Cow::Borrowed(include_str!("shader.vert")),
-                    stage: naga::ShaderStage::Vertex,
-                    defines: Default::default(),
-                },
-            });
-        let fragment_shader = gpu
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("fragment_shader"),
-                source: wgpu::ShaderSource::Glsl {
-                    shader: Cow::Borrowed(include_str!("shader.frag")),
-                    stage: naga::ShaderStage::Fragment,
-                    defines: Default::default(),
-                },
-            });
-
-        let bind_group_layouts = bind_group_layouts.iter().collect::<Vec<_>>();
-        let pipeline_layout = gpu
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: None,
-                bind_group_layouts: &bind_group_layouts,
-                push_constant_ranges: &[],
-            });
-
-        let swapchain_format = gpu.swapchain_format();
-        let render_pipeline = gpu
-            .device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &vertex_shader,
-                    entry_point: "main",
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &fragment_shader,
-                    entry_point: "main",
-                    targets: &[Some(swapchain_format.into())],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview: None,
-            });
-
-        let egui_renderer = egui_wgpu::Renderer::new(&gpu.device, swapchain_format, None, 1);
-
-        Pipeline {
-            _pipeline_layout: pipeline_layout,
-            render_pipeline,
-            egui_renderer,
-        }
-    }
-
-    fn redraw(
+    fn run(
         &mut self,
-        gpu: &Gpu,
-        bind_groups: Option<&[wgpu::BindGroup]>,
-        ui: &mut Ui,
-        full_output: egui::FullOutput,
-    ) {
-        // Prepare frame resources.
-        let (frame, view) = gpu.get_current_texture();
-        let mut encoder = gpu.create_encoder();
-
-        // Upload egui data.
-        let egui_paint_jobs = ui.context.tessellate(full_output.shapes);
-        let texture_sets = full_output.textures_delta.set;
-
-        for (id, image_delta) in texture_sets {
-            self.egui_renderer
-                .update_texture(&gpu.device, &gpu.queue, id, &image_delta);
-        }
-
-        let mut command_buffers = self.egui_renderer.update_buffers(
-            &gpu.device,
-            &gpu.queue,
-            &mut encoder,
-            &egui_paint_jobs,
-            &ui.screen_descriptor,
-        );
-
-        // Run renderpass (with egui at the end).
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
-                        store: true,
-                    },
-                })],
-                depth_stencil_attachment: None,
-            });
-
-            // Run shader.
-            if let Some(bind_groups) = bind_groups {
-                render_pass.set_pipeline(&self.render_pipeline);
-                for (index, bind_group) in bind_groups.iter().enumerate() {
-                    render_pass.set_bind_group(index.try_into().unwrap(), bind_group, &[]);
-                }
-                render_pass.draw(0..4, 0..1);
-            }
-
-            // Render GUI.
-            self.egui_renderer
-                .render(&mut render_pass, &egui_paint_jobs, &ui.screen_descriptor);
-        }
-
-        let texture_frees = full_output.textures_delta.free;
-        for id in texture_frees {
-            self.egui_renderer.free_texture(&id);
-        }
-
-        command_buffers.push(encoder.finish());
-
-        gpu.queue.submit(command_buffers);
-        frame.present();
+        window: &Window,
+        run_ui: impl FnOnce(&egui::Context),
+    ) -> (Vec<egui::ClippedPrimitive>, egui::TexturesDelta) {
+        let egui::FullOutput {
+            shapes,
+            textures_delta,
+            ..
+        } = self.context.run(self.state.take_egui_input(window), run_ui);
+        (self.context.tessellate(shapes), textures_delta)
     }
 }
 
@@ -358,6 +216,8 @@ struct App {
     highlight_hovered_group: bool,
     /// Whether to highlight open groups only.
     highlight_open_groups: bool,
+
+    show_placements: [bool; 7],
 }
 
 const SIN_30: f32 = 0.5;
@@ -379,7 +239,7 @@ impl App {
             // 4 int
             let hover_pos = data::IVEC2_;
             let hover_rotation = data::INT_;
-            let pad2 = data::PAD_;
+            let pad1 = data::PAD_;
 
             // 4 int
             let hover_tile = data::INT_;
@@ -388,17 +248,15 @@ impl App {
             let coloring = data::INT_;
             let highlight_flags = data::INT_;
 
-            let gold = data::IVEC2_;
-            let silver = data::IVEC2_;
-
-            let bronze = data::IVEC2_;
+            let show_score_flags = data::INT_;
+            let pad2 = data::PAD_;
 
             (size + aspect_ratio + time)
                 + (origin + rotation + inv_scale)
-                + (hover_pos + hover_rotation + pad2)
+                + (hover_pos + hover_rotation + pad1)
                 + (hover_tile + hover_group + coloring + highlight_flags)
-                + (gold + silver)
-                + bronze
+                + show_score_flags
+                + pad2
         })
         .unwrap();
         gpu.create_buffer(
@@ -491,6 +349,8 @@ impl App {
             coloring: 0,
             highlight_hovered_group: false,
             highlight_open_groups: true,
+
+            show_placements: [true; 7],
         };
 
         let size = window.inner_size();
@@ -606,18 +466,12 @@ impl App {
                 | if self.highlight_open_groups { 2 } else { 0 };
             *iptr.add(15) = highlight_flags;
 
-            let best_placements = self.map.best_placements();
-            if best_placements.len() >= 3 {
-                let gold = best_placements[0];
-                *iptr.add(16) = gold.0.x;
-                *iptr.add(17) = gold.0.y;
-                let silver = best_placements[1];
-                *iptr.add(18) = silver.0.x;
-                *iptr.add(19) = silver.0.y;
-                let bronze = best_placements[2];
-                *iptr.add(20) = bronze.0.x;
-                *iptr.add(21) = bronze.0.y;
+            let mut show_score_flags = 0;
+            for score in 0..7 {
+                show_score_flags |= (self.show_placements[score] as i32) << score;
+                // TODO i32
             }
+            *iptr.add(16) = show_score_flags;
         }
     }
 
@@ -645,6 +499,10 @@ impl App {
         self.tiles_buffer = Self::create_tiles_buffer(gpu, &self.map);
         self.generate_bind_group(gpu);
         self.write_tiles(gpu);
+        self.show_placements = [false; 7];
+        if let Some((score, _)) = self.map.best_placements().get(0) {
+            self.show_placements[*score as usize] = true;
+        }
     }
 
     fn handle_file_dialog(&mut self, gpu: &Gpu) {
@@ -736,7 +594,7 @@ fn run(
                     WindowEvent::Resized(size) => {
                         // Window has been resized. Adjust render pipeline settings.
                         gpu.resize(size.width, size.height);
-                        ui.resize(size.width, size.height);
+                        pipeline.resize(size.width, size.height);
                         app.resize(UVec2::new(size.width, size.height));
 
                         // On macos the window needs to be redrawn manually after resizing
@@ -749,7 +607,7 @@ fn run(
                 window.request_redraw();
             }
             Event::RedrawRequested(_) => {
-                let full_output = ui.run(&window, |ctx| {
+                let (paint_jobs, textures_delta) = ui.run(&window, |ctx| {
                     // egui::CentralPanel::default()
                     //     .frame(egui::Frame::none().fill(egui::Color32::TRANSPARENT))
                     egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
@@ -774,8 +632,16 @@ fn run(
                             ui.label("Visual settings");
                             ui.horizontal(|ui| {
                                 ui.label("Goto");
-                                ui.text_edit_singleline(&mut app.goto_x);
-                                let response = ui.text_edit_singleline(&mut app.goto_y);
+                                let size = ui.available_size();
+
+                                let edit_x = egui::TextEdit::singleline(&mut app.goto_x);
+                                ui.add_sized((size.x / 3.0, size.y), edit_x);
+                                // ui.add(edit_x);
+
+                                let edit_y = egui::TextEdit::singleline(&mut app.goto_y);
+                                let response = ui.add_sized((size.x / 3.0, size.y), edit_y);
+                                // let response = ui.add(edit_y);
+
                                 if response.lost_focus()
                                     && ui.input(|i| i.key_pressed(egui::Key::Enter))
                                 {
@@ -796,6 +662,24 @@ fn run(
                                 "Highlight hovered group",
                             );
                             ui.checkbox(&mut app.highlight_open_groups, "Highlight open groups");
+                            ui.label("Placement options");
+                            egui::Grid::new("placement_options").show(ui, |ui| {
+                                ui.label("Score");
+                                ui.label("Count");
+                                ui.label("Show");
+                                ui.end_row();
+
+                                for (score, placements) in app.map.best_placements() {
+                                    if *score < 0 {
+                                        continue;
+                                    }
+                                    ui.label(format!("{score}"));
+                                    ui.label(format!("{}", placements.len()));
+                                    ui.checkbox(&mut app.show_placements[*score as usize], "");
+                                    ui.end_row();
+                                }
+                                // ui.label(format!("x: {}, y: {}", app.hover_pos.x, app.hover_pos.y));
+                            });
                         },
                     );
                     if show_tooltip {
@@ -906,7 +790,7 @@ fn run(
                     .groups
                     .as_ref()
                     .map(|array| array.as_slice());
-                pipeline.redraw(&gpu, bind_groups, &mut ui, full_output);
+                pipeline.redraw(&gpu, bind_groups, paint_jobs, textures_delta);
             }
             _ => {}
         }
@@ -920,7 +804,7 @@ fn main() {
     let window = winit::window::Window::new(&event_loop).unwrap();
     let gpu = pollster::block_on(Gpu::new(&window));
     let app = App::new(&window, &gpu);
-    let pipeline = Pipeline::new(&gpu, &app.bind_groups.layouts);
+    let pipeline = Pipeline::new(&gpu, &window, &app.bind_groups.layouts);
     let ui = Ui::new(&window);
 
     run(event_loop, window, gpu, pipeline, ui, app);

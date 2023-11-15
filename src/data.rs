@@ -269,12 +269,12 @@ fn segments_from_quest_id(pos: IVec2, quest_tile_id: QuestTileId) -> Vec<Segment
             Segment {
                 form: Form::Size2,
                 terrain: Terrain::Wheat,
-                rotation: 0,
+                rotation: 5,
             },
             Segment {
                 form: Form::Size4,
                 terrain: Terrain::Forest,
-                rotation: 2,
+                rotation: 1,
             },
         ],
         // 2AA

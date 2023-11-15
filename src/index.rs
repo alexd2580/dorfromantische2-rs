@@ -21,7 +21,7 @@ impl Index {
     }
 
     /// Compute the position of tile at `pos` in the index structure.
-    fn tile_key(&self, pos: IVec2) -> Option<IndexKey> {
+    pub fn tile_key(&self, pos: IVec2) -> Option<IndexKey> {
         let upper = self.offset + self.size;
         let valid_s = pos.x >= self.offset.x && pos.x < upper.x;
         let valid_t = pos.y >= self.offset.y && pos.y < upper.y;
