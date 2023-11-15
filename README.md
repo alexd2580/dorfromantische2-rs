@@ -9,7 +9,8 @@ steamapps/compatdata/*/pfx/drive_c/users/steamuser/AppData/LocalLow/Toukana\ Int
 # TODOs
 
 [x] Document TODOs
-[ ] Fix lints
+[x] Fix lints
+[ ] Split run function
 [ ] Add screenshot
 [ ] Incremental reload (nrbf is going to be fun....)
 [ ] Decode preplaced tiles (the coordinate conversion is going to be fun)

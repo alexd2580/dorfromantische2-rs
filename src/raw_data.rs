@@ -82,7 +82,7 @@ impl<T: for<'a> TryFrom<&'a Value, Error = String>> TryFrom<&Value> for GenericL
 }
 
 fn try_key_of<'a>(values: &'a HashMap<String, Value>, key: &str) -> Result<&'a Value, String> {
-    values.get(key).ok_or(format!("No {} field in object", key))
+    values.get(key).ok_or(format!("No {key} field in object"))
 }
 
 fn try_key_as<'a, T: TryFrom<&'a Value, Error = std::string::String>>(
@@ -330,7 +330,7 @@ impl TryFrom<&Value> for GameModeId {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct QuestTileId(pub i32);
 
 impl TryFrom<&Value> for QuestTileId {

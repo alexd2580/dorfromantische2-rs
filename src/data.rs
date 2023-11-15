@@ -73,6 +73,7 @@ pub enum Terrain {
 }
 
 impl Terrain {
+    #[allow(clippy::match_same_arms)]
     pub fn connects_to(self, terrain: Terrain) -> bool {
         if self == terrain {
             return true;
@@ -92,6 +93,7 @@ impl Terrain {
         }
     }
 
+    #[allow(clippy::match_same_arms)]
     pub fn neighbor_score(self, other: Terrain) -> i32 {
         match (self, other) {
             // Empty
@@ -208,6 +210,7 @@ impl From<&raw_data::Segment> for Segment {
 }
 
 impl Segment {
+    #[allow(clippy::match_same_arms)]
     pub fn rotations(&self) -> Vec<Rotation> {
         let local_rotations = match self.form {
             Form::Size1 => [0].as_slice(),
@@ -254,13 +257,14 @@ impl Default for Tile {
     fn default() -> Self {
         Self {
             pos: IVec2::ZERO,
-            segments: Default::default(),
+            segments: Vec::default(),
             parts: [Terrain::Missing; 6],
             quest_tile: None,
         }
     }
 }
 
+#[allow(clippy::match_same_arms)]
 fn segments_from_quest_id(pos: IVec2, quest_tile_id: QuestTileId) -> Vec<Segment> {
     match quest_tile_id.0 {
         // Wheat
@@ -733,11 +737,11 @@ impl From<&raw_data::Tile> for Tile {
         let pos = IVec2::new(value.s, value.t - ((value.s + 1) & -2i32) / 2);
 
         let special = value.special_tile_id.0;
-        let quest_tile = value.quest_tile.as_ref().map(|x| x.quest_tile_id.clone());
+        let quest_tile = value.quest_tile.as_ref().map(|x| x.quest_tile_id);
 
         // Build segments.
         let mut segments = if let Some(quest_id) = &quest_tile {
-            segments_from_quest_id(pos, quest_id.clone())
+            segments_from_quest_id(pos, *quest_id)
         } else if special != 0 {
             match special {
                 1 => {
@@ -761,17 +765,16 @@ impl From<&raw_data::Tile> for Tile {
         };
 
         // Apply tile rotation.
-        segments.iter_mut().for_each(|segment| {
+        for segment in &mut segments {
             segment.rotation = (segment.rotation + usize::try_from(value.rotation).unwrap()) % 6;
-        });
+        }
 
         // Compute parts.
         let parts = [0, 1, 2, 3, 4, 5].map(|rotation| {
             segments
                 .iter()
                 .find(|segment| segment.rotations().into_iter().any(|r| r == rotation))
-                .map(|segment| segment.terrain)
-                .unwrap_or(Terrain::Empty)
+                .map_or(Terrain::Empty, |segment| segment.terrain)
         });
 
         Self {
@@ -840,7 +843,7 @@ impl Tile {
                 })
                 .collect(),
             parts: [0, 1, 2, 3, 4, 5].map(|index| self.parts[(index + rotation) % 6]),
-            quest_tile: self.quest_tile.clone(),
+            quest_tile: self.quest_tile,
         }
     }
 }

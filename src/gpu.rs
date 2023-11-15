@@ -107,7 +107,7 @@ impl Gpu {
     pub fn upload_texture(
         &self,
         path: &str,
-        image: image::ImageBuffer<image::Rgba<u8>, Vec<u8>>,
+        image: &image::ImageBuffer<image::Rgba<u8>, Vec<u8>>,
     ) -> wgpu::Texture {
         let dimensions = image.dimensions();
         let texture_size = wgpu::Extent3d {
@@ -132,7 +132,7 @@ impl Gpu {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &image,
+            image,
             wgpu::ImageDataLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * dimensions.0),

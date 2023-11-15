@@ -11,6 +11,7 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::Window,
 };
+
 mod data;
 mod gpu;
 mod index;
@@ -27,7 +28,7 @@ struct Ui {
 impl Ui {
     fn new(window: &Window) -> Self {
         Self {
-            context: Default::default(),
+            context: egui::Context::default(),
             state: egui_winit::State::new(window),
         }
     }
@@ -77,7 +78,7 @@ impl BindGroups {
     fn new(gpu: &Gpu, entries: &[(u32, wgpu::BindingType)]) -> BindGroups {
         let entries = entries
             .iter()
-            .cloned()
+            .copied()
             .map(|(binding, ty)| wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -94,7 +95,7 @@ impl BindGroups {
 
         Self {
             layouts: [layout],
-            groups: Default::default(),
+            groups: Option::default(),
         }
     }
 
@@ -128,16 +129,12 @@ impl FileChooseDialog {
         if !self.is_open() {
             self.handle = Some(std::thread::spawn(|| {
                 rfd::FileDialog::new().set_directory(".").pick_file()
-            }))
+            }));
         }
     }
 
     fn take_result(&mut self) -> Option<PathBuf> {
-        if self
-            .handle
-            .as_ref()
-            .is_some_and(|handle| handle.is_finished())
-        {
+        if self.handle.as_ref().is_some_and(JoinHandle::is_finished) {
             self.handle
                 .take()
                 .unwrap()
@@ -149,6 +146,7 @@ impl FileChooseDialog {
     }
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct App {
     program_start: SystemTime,
 
@@ -221,7 +219,7 @@ struct App {
 }
 
 const SIN_30: f32 = 0.5;
-const COS_30: f32 = 0.8660254;
+const COS_30: f32 = 0.866_025_4;
 
 impl App {
     fn create_view_buffer(gpu: &Gpu) -> Buffer {
@@ -310,7 +308,7 @@ impl App {
             program_start: SystemTime::now(),
 
             // Savegame.
-            file_choose_dialog: Default::default(),
+            file_choose_dialog: FileChooseDialog::default(),
             file: None,
             mtime: SystemTime::now(),
 
@@ -369,11 +367,11 @@ impl App {
 
     fn resize(&mut self, size: UVec2) {
         self.size = size;
-        let fsize = size.as_vec2();
-        self.aspect_ratio = fsize.x / fsize.y;
+        let f32_size = size.as_vec2();
+        self.aspect_ratio = f32_size.x / f32_size.y;
     }
 
-    fn hex_to_world(pos: &IVec2) -> Vec2 {
+    fn hex_to_world(pos: IVec2) -> Vec2 {
         Vec2::new(pos.x as f32 * 1.5, (pos.x + pos.y * 2) as f32 * COS_30)
     }
 
@@ -383,7 +381,7 @@ impl App {
         let y = (y_rest / (2.0 * COS_30)).round();
 
         let prelim = IVec2::new(x as i32, y as i32);
-        pos -= Self::hex_to_world(&prelim);
+        pos -= Self::hex_to_world(prelim);
         let xc = (0.5 * Vec2::new(COS_30, SIN_30).dot(pos) / COS_30).round() as i32;
         let xyc = (0.5 * Vec2::new(-COS_30, SIN_30).dot(pos) / COS_30).round() as i32;
 
@@ -412,7 +410,7 @@ impl App {
         self.mouse_position = pos;
         let world_pos = self.pixel_to_world(pos);
         self.hover_pos = Self::world_to_hex(world_pos);
-        let offset = world_pos - App::hex_to_world(&self.hover_pos);
+        let offset = world_pos - App::hex_to_world(self.hover_pos);
 
         let gradient = 2.0 * COS_30 * offset.x;
         self.hover_rotation = match (offset.y > 0.0, offset.y > gradient, offset.y > -gradient) {
@@ -438,6 +436,7 @@ impl App {
         self.inv_scale = 5f32.max(self.inv_scale - y).min(500.0);
     }
 
+    #[allow(clippy::cast_ptr_alignment, clippy::similar_names)]
     fn write_view(&self, gpu: &Gpu) {
         let mut buffer_view = self.view_buffer.write(gpu);
         unsafe {
@@ -462,13 +461,13 @@ impl App {
             *uptr.add(12) = self.hover_tile.map_or(u32::MAX, |x| x.try_into().unwrap());
             *uptr.add(13) = self.hover_group.map_or(u32::MAX, |x| x.try_into().unwrap());
             *iptr.add(14) = self.coloring;
-            let highlight_flags = if self.highlight_hovered_group { 1 } else { 0 }
-                | if self.highlight_open_groups { 2 } else { 0 };
+            let highlight_flags = i32::from(self.highlight_hovered_group)
+                | (2 * i32::from(self.highlight_open_groups));
             *iptr.add(15) = highlight_flags;
 
             let mut show_score_flags = 0;
             for score in 0..7 {
-                show_score_flags |= (self.show_placements[score] as i32) << score;
+                show_score_flags |= i32::from(self.show_placements[score]) << score;
                 // TODO i32
             }
             *iptr.add(16) = show_score_flags;
@@ -521,6 +520,7 @@ impl App {
     }
 }
 
+#[allow(for_loops_over_fallibles)]
 fn run(
     event_loop: EventLoop<()>,
     window: Window,
@@ -768,7 +768,7 @@ fn run(
                                     app.mouse_position.y - 50.0,
                                 ))
                                 .show(ctx, |ui| {
-                                    for score in rotation_scores.into_iter() {
+                                    for score in rotation_scores {
                                         ui.label(format!("{score}"));
                                     }
                                 });
@@ -785,12 +785,8 @@ fn run(
                     app.load_file(app.file.as_ref().unwrap().clone(), &gpu);
                 }
                 app.write_view(&gpu);
-                let bind_groups = app
-                    .bind_groups
-                    .groups
-                    .as_ref()
-                    .map(|array| array.as_slice());
-                pipeline.redraw(&gpu, bind_groups, paint_jobs, textures_delta);
+                let bind_groups = app.bind_groups.groups.as_ref().map(<[_; 1]>::as_slice);
+                pipeline.redraw(&gpu, bind_groups, &paint_jobs, textures_delta);
             }
             _ => {}
         }

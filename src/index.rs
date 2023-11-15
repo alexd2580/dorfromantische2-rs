@@ -32,7 +32,7 @@ impl Index {
     }
 
     fn key_value(&self, key: IndexKey) -> Option<TileId> {
-        self.index.get(key).cloned().flatten()
+        self.index.get(key).copied().flatten()
     }
 
     /// Compute the position of tile at `pos` in the tiles' list.

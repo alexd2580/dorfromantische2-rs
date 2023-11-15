@@ -46,7 +46,7 @@ pub struct Map {
 impl Default for Map {
     fn default() -> Self {
         let tiles = vec![Tile {
-            pos: Default::default(),
+            pos: IVec2::ZERO,
             segments: vec![],
             parts: [Terrain::Empty; 6],
             quest_tile: None,
@@ -56,12 +56,12 @@ impl Default for Map {
         Self {
             tiles,
             index,
-            assigned_groups: Default::default(),
-            groups: Default::default(),
-            probabilities: Default::default(),
-            possible_placements: Default::default(),
-            next_tile: Default::default(),
-            best_placements: Default::default(),
+            assigned_groups: HashMap::default(),
+            groups: Vec::default(),
+            probabilities: HashMap::default(),
+            possible_placements: HashSet::default(),
+            next_tile: Option::default(),
+            best_placements: Vec::default(),
         }
     }
 }
@@ -87,7 +87,7 @@ impl From<&raw_data::SaveGame> for Map {
             });
 
         // Prepend tiles list with empty tile (is this necessary when i start parsing special tiles?)
-        let tiles = iter::once(Default::default())
+        let tiles = iter::once(Tile::default())
             .chain(savegame.tiles.iter().map(Tile::from))
             .collect::<Vec<_>>();
         let index = Index::from(&tiles);
@@ -100,10 +100,10 @@ impl From<&raw_data::SaveGame> for Map {
             index,
             assigned_groups,
             groups,
-            probabilities: Default::default(),
+            probabilities: HashMap::default(),
             possible_placements,
             next_tile,
-            best_placements: Default::default(),
+            best_placements: Vec::default(),
         };
 
         let next_tile = map.next_tile.as_ref().unwrap();
@@ -201,7 +201,7 @@ impl Map {
                 let mut group_ids = segment
                     .rotations()
                     .into_iter()
-                    .flat_map(|rotation| {
+                    .filter_map(|rotation| {
                         let neighbor_pos = tile.neighbor_coordinates(rotation);
                         let opposite_side = Tile::opposite_side(rotation);
 
@@ -217,14 +217,14 @@ impl Map {
                                     .and_then(|(segment_id, _)| {
                                         assigned_groups.get(&(neighbor_id, segment_id))
                                     })
-                                    .cloned()
+                                    .copied()
                             })
                     })
                     .collect::<HashSet<_>>();
 
                 // Choose the new group id from the collected ids.
                 let group_id = if group_ids.is_empty() {
-                    groups.push(Default::default());
+                    groups.push(HashSet::default());
                     groups.len() - 1
                 } else if group_ids.len() == 1 {
                     group_ids.drain().next().unwrap()
@@ -242,7 +242,7 @@ impl Map {
                 let mut group = std::mem::take(&mut groups[group_id]);
                 group.insert((tile_id, segment_id));
                 // Remap all connected groups to the chosen one (TODO Expensive!).
-                for other_id in group_ids.into_iter() {
+                for other_id in group_ids {
                     group.extend(groups[other_id].drain().inspect(|(tile_id, segment_id)| {
                         assigned_groups.insert((*tile_id, *segment_id), group_id);
                     }));
@@ -255,7 +255,7 @@ impl Map {
             .into_iter()
             .map(|segments| Group {
                 segments,
-                open_edges: Default::default(),
+                open_edges: HashSet::default(),
             })
             .collect::<Vec<_>>();
 
@@ -284,7 +284,7 @@ impl Map {
                     groups[group_of_segment]
                         .open_edges
                         .insert((tile_id, rotation));
-                })
+                });
             });
 
         (assigned_groups, groups, possible_placements)
@@ -298,15 +298,16 @@ impl Map {
                 // Get the neighbor at that side.
                 self.index
                     .tile_index(Tile::neighbor_coordinates_of(tile.pos, side))
-                    .map(|neighbor| tile.placement_score(side, &self.tiles[neighbor]))
-                    .unwrap_or(0)
+                    .map_or(0, |neighbor| {
+                        tile.placement_score(side, &self.tiles[neighbor])
+                    })
             })
             .sum()
     }
 
     pub fn byte_size(&self) -> usize {
         let num_tiles = self.index.index_data().len();
-        #[allow(unused_parens)]
+        #[allow(unused_parens, clippy::identity_op)]
         (
             // Offset
             1 * IVEC2_
@@ -317,6 +318,7 @@ impl Map {
         )
     }
 
+    #[allow(clippy::similar_names, clippy::cast_ptr_alignment)]
     pub unsafe fn write_to(&self, ptr: *mut u8) {
         let iptr = ptr.cast::<i32>();
 
@@ -335,7 +337,7 @@ impl Map {
                 let segments = &self.tile(tile_id).segments;
                 for (segment_id, segment) in segments.iter().enumerate() {
                     let group = self.group_of(tile_id, segment_id);
-                    let is_closed = self.groups[group].open_edges.is_empty() as u32;
+                    let is_closed = u32::from(self.groups[group].open_edges.is_empty());
 
                     // Each segment is a uint32.
                     *tptr.add(segment_id) = segment.terrain as u32

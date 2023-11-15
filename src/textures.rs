@@ -17,20 +17,20 @@ impl Textures {
     fn load_texture(path: &str, gpu: &Gpu) -> wgpu::Texture {
         let image = image::io::Reader::open(path).unwrap().decode().unwrap();
         let image = image.to_rgba8();
-        gpu.upload_texture(path, image)
+        gpu.upload_texture(path, &image)
     }
 
     pub fn new(gpu: &Gpu) -> Self {
         // Textures tutorial:
         // https://sotrh.github.io/learn-wgpu/beginner/tutorial5-textures/#the-bindgroup
         let forest_texture = Self::load_texture("seamless-forest.jpg", gpu);
-        let forest_view = forest_texture.create_view(&Default::default());
+        let forest_view = forest_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let city_texture = Self::load_texture("seamless-city.jpg", gpu);
-        let city_view = city_texture.create_view(&Default::default());
+        let city_view = city_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let river_texture = Self::load_texture("seamless-river.jpg", gpu);
-        let river_view = river_texture.create_view(&Default::default());
+        let river_view = river_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let wheat_texture = Self::load_texture("seamless-wheat.jpg", gpu);
-        let wheat_view = wheat_texture.create_view(&Default::default());
+        let wheat_view = wheat_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let texture_sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,

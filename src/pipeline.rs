@@ -1,7 +1,7 @@
 use winit::window::Window;
 
 use crate::gpu::Gpu;
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::HashMap};
 
 pub struct Pipeline {
     _pipeline_layout: wgpu::PipelineLayout,
@@ -21,7 +21,7 @@ impl Pipeline {
                 source: wgpu::ShaderSource::Glsl {
                     shader: Cow::Borrowed(include_str!("shader.vert")),
                     stage: naga::ShaderStage::Vertex,
-                    defines: Default::default(),
+                    defines: HashMap::default(),
                 },
             });
         let fragment_shader = gpu
@@ -31,7 +31,7 @@ impl Pipeline {
                 source: wgpu::ShaderSource::Glsl {
                     shader: Cow::Borrowed(include_str!("shader.frag")),
                     stage: naga::ShaderStage::Fragment,
-                    defines: Default::default(),
+                    defines: HashMap::default(),
                 },
             });
 
@@ -92,7 +92,7 @@ impl Pipeline {
         &mut self,
         gpu: &Gpu,
         bind_groups: Option<&[wgpu::BindGroup]>,
-        egui_paint_jobs: Vec<egui::ClippedPrimitive>,
+        egui_paint_jobs: &[egui::ClippedPrimitive],
         textures_delta: egui::TexturesDelta,
     ) {
         // Prepare frame resources.
@@ -109,7 +109,7 @@ impl Pipeline {
             &gpu.device,
             &gpu.queue,
             &mut encoder,
-            &egui_paint_jobs,
+            egui_paint_jobs,
             &self.egui_screen_descriptor,
         );
 
@@ -140,7 +140,7 @@ impl Pipeline {
             // Render GUI.
             self.egui_renderer.render(
                 &mut render_pass,
-                &egui_paint_jobs,
+                egui_paint_jobs,
                 &self.egui_screen_descriptor,
             );
         }
