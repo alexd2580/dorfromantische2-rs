@@ -473,7 +473,8 @@ fn segments_from_quest_id(pos: IVec2, quest_tile_id: QuestTileId) -> Vec<Segment
         }],
 
         // Train
-        // 2BT_3AA_1AA TODO?
+        // 2BT_3AA_1AA is this a bug? it says 3AA, but the tile only has size2 agriculture.
+        // BUG!
         25 => vec![
             Segment {
                 form: Form::Bridge,
@@ -486,9 +487,9 @@ fn segments_from_quest_id(pos: IVec2, quest_tile_id: QuestTileId) -> Vec<Segment
                 rotation: 1,
             },
             Segment {
-                form: Form::Size3,
+                form: Form::Size2,
                 terrain: Terrain::Wheat,
-                rotation: 3,
+                rotation: 4,
             },
         ],
         // 2BT_3AF_1AF
