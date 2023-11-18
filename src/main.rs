@@ -581,6 +581,8 @@ impl App {
             if let Some((score, _)) = self.map.best_placements().iter().last() {
                 self.show_placements[*score as usize] = true;
             }
+            self.hover_tile = None;
+            self.hover_group = None;
         }
     }
 
