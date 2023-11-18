@@ -248,12 +248,22 @@ struct App {
     grab_rotate: bool,
 
     // World info.
-    /// Origin coordinates (center of screen).
+    /// Current origin coordinates (center of screen).
     origin: Vec2,
+    /// Origin coordinates to move from.
+    source_origin: Vec2,
+    /// Origin coordinates to move to.
+    target_origin: Vec2,
+    /// Mix between source and target.
+    origin_mix: f32,
+
     /// Rotation relative to origin (TODO unused currently).
     rotation: f32,
-    /// World size (how many tiles are visible).
+    /// Current world size (how many tiles are visible).
     inv_scale: f32,
+    source_inv_scale: f32,
+    target_inv_scale: f32,
+    inv_scale_mix: f32,
 
     /// World hover position of mouse
     hover_pos: IVec2,
@@ -394,8 +404,16 @@ impl App {
 
             // World info.
             origin: Vec2::ZERO,
+            source_origin: Vec2::ZERO,
+            target_origin: Vec2::ZERO,
+            origin_mix: 1.0,
+
             rotation: 0.0,
+
             inv_scale: 20.0,
+            source_inv_scale: 20.0,
+            target_inv_scale: 20.0,
+            inv_scale_mix: 1.0,
 
             hover_pos: IVec2::ZERO,
             hover_rotation: 0,
@@ -462,7 +480,11 @@ impl App {
         let delta = (pos - self.mouse_position) / self.size.as_vec2();
 
         if self.grab_move {
-            self.origin += Vec2::new(-1.0 * self.aspect_ratio, 1.0) * delta * self.inv_scale;
+            let new_origin =
+                self.origin + Vec2::new(-1.0 * self.aspect_ratio, 1.0) * delta * self.inv_scale;
+            self.origin = new_origin;
+            self.target_origin = new_origin;
+            self.origin_mix = 1.0;
         }
 
         if self.grab_rotate {
@@ -496,7 +518,10 @@ impl App {
     }
 
     fn on_scroll(&mut self, y: f32) {
-        self.inv_scale = 5f32.max(self.inv_scale - y).min(500.0);
+        let inv_scale = 5f32.max(self.inv_scale - y).min(500.0);
+        self.inv_scale = inv_scale;
+        self.target_inv_scale = inv_scale;
+        self.inv_scale_mix = 1.0;
     }
 
     #[allow(clippy::cast_ptr_alignment, clippy::similar_names)]
@@ -590,9 +615,32 @@ impl App {
         let x = self.goto_x.parse::<i32>();
         let y = self.goto_y.parse::<i32>();
         if let (Ok(x), Ok(y)) = (x, y) {
-            self.origin = Self::hex_to_world(IVec2::new(x, y));
-            self.inv_scale = 30.0;
+            self.source_origin = self.origin;
+            self.target_origin = Self::hex_to_world(IVec2::new(x, y));
+            self.origin_mix = 0.0;
+
+            self.source_inv_scale = self.inv_scale;
+            self.target_inv_scale = 30.0;
+            self.inv_scale_mix = 0.0;
         }
+    }
+
+    fn tick(&mut self, gpu: &Gpu) {
+        let smoothstep = |x: f32| -2.0 * x.powi(3) + 3.0 * x.powi(2);
+
+        self.origin_mix = 1f32.min(self.origin_mix + 1.0 / 60.0);
+        self.origin = self
+            .source_origin
+            .lerp(self.target_origin, smoothstep(self.origin_mix));
+
+        self.inv_scale_mix = 1f32.min(self.inv_scale_mix + 1.0 / 60.0);
+        self.inv_scale = self.source_inv_scale
+            + (self.target_inv_scale - self.source_inv_scale) * smoothstep(self.inv_scale_mix);
+
+        self.handle_file_dialog();
+        self.reload_file_if_changed();
+        self.handle_map_loader(&gpu);
+        self.write_view(&gpu);
     }
 }
 
@@ -636,7 +684,25 @@ fn render_ui(
                 app.submit_goto();
             }
         });
-        ui.add(egui::Slider::new(&mut app.inv_scale, 5.0..=500.0).text("Zoom out"));
+        ui.horizontal(|ui| {
+            let slider = egui::Slider::new(&mut app.target_inv_scale, 5.0..=500.0).text("Zoom out");
+            if ui.add(slider).changed() {
+                app.inv_scale = app.target_inv_scale;
+                app.inv_scale_mix = 1.0;
+            }
+            if ui.button("Zoom fit").clicked() {
+                let (offset, size) = app.map.offset_and_size();
+
+                app.source_origin = app.origin;
+                app.target_origin = App::hex_to_world(offset + size / 2);
+                app.origin_mix = 0.0;
+
+                app.source_inv_scale = app.inv_scale;
+                app.target_inv_scale =
+                    (0.5 + size.x as f32 * 1.5).max((1 + size.y) as f32 * COS_30);
+                app.inv_scale_mix = 0.0;
+            }
+        });
         ui.add_space(10.0);
 
         ui.label(egui::RichText::new("Tooltip").size(20.0).underline());
@@ -871,10 +937,7 @@ fn run(
                     render_ui(&mut app, ctx, &mut sidebar_expanded, &mut show_tooltip)
                 });
 
-                app.handle_file_dialog();
-                app.reload_file_if_changed();
-                app.handle_map_loader(&gpu);
-                app.write_view(&gpu);
+                app.tick(&gpu);
                 let bind_groups = app.bind_groups.groups.as_ref().map(<[_; 1]>::as_slice);
                 pipeline.redraw(&gpu, bind_groups, &paint_jobs, textures_delta);
             }

@@ -23,6 +23,6 @@ steamapps/compatdata/*/pfx/drive_c/users/steamuser/AppData/LocalLow/Toukana\ Int
 - [x] Improve UI
 - [ ] Fix tooltip that shows up when mouse is outside window
 - [ ] Highlight big groups
-- [ ] Lerp for goto
+- [x] Lerp for goto
 - [ ] Collapsible list view of groups
 - [ ] Auto-retry when failing to load file

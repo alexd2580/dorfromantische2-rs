@@ -397,6 +397,10 @@ impl Map {
         [0, 1, 2, 3, 4, 5].map(|side| self.terrain_of_neighbor_at(pos, side))
     }
 
+    pub fn offset_and_size(&self) -> (IVec2, IVec2) {
+        self.index.offset_and_size()
+    }
+
     pub fn byte_size(&self) -> usize {
         let num_tiles = self.index.index_data().len();
         #[allow(unused_parens, clippy::identity_op)]
@@ -414,7 +418,7 @@ impl Map {
     pub unsafe fn write_to(&self, ptr: *mut u8) {
         let iptr = ptr.cast::<i32>();
 
-        let (offset, size) = self.index.offset_and_size();
+        let (offset, size) = self.offset_and_size();
         *iptr.add(0) = offset.x;
         *iptr.add(1) = offset.y;
         *iptr.add(2) = size.x;
