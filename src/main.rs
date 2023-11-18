@@ -3,7 +3,12 @@ use glam::{IVec2, UVec2, Vec2};
 use gpu::{Buffer, Gpu, SizeOrContent};
 use map::{GroupId, Map};
 use pipeline::Pipeline;
-use std::{fs::File, path::PathBuf, thread::JoinHandle, time::SystemTime};
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+    thread::JoinHandle,
+    time::{Duration, SystemTime},
+};
 use textures::Textures;
 use winit::{
     dpi::PhysicalPosition,
@@ -145,6 +150,58 @@ impl FileChooseDialog {
         }
     }
 }
+#[derive(Default)]
+struct MapLoader {
+    handle: Option<JoinHandle<Map>>,
+}
+
+impl MapLoader {
+    fn in_progress(&self) -> bool {
+        self.handle
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished())
+    }
+
+    fn load(&mut self, path: &Path) {
+        if !self.in_progress() {
+            let path = path.to_owned();
+            self.handle = Some(std::thread::spawn(|| {
+                // Load savegame.
+                dbg!("loading savegame");
+                let path = path;
+                // Fugly retry mechanism.
+                let parsed = std::panic::catch_unwind(|| {
+                    let mut stream = File::open(&path).expect("Failed to open file");
+                    nrbf_rs::parse_nrbf(&mut stream)
+                })
+                .or_else(|_| {
+                    std::panic::catch_unwind(|| {
+                        let mut stream = File::open(&path).expect("Failed to open file");
+                        nrbf_rs::parse_nrbf(&mut stream)
+                    })
+                })
+                .or_else(|_| {
+                    std::panic::catch_unwind(|| {
+                        let mut stream = File::open(&path).expect("Failed to open file");
+                        nrbf_rs::parse_nrbf(&mut stream)
+                    })
+                })
+                .unwrap();
+                let savegame = raw_data::SaveGame::try_from(&parsed).unwrap();
+                dbg!("loading map");
+                Map::from(&savegame)
+            }));
+        }
+    }
+
+    fn take_result(&mut self) -> Option<Map> {
+        if self.handle.as_ref().is_some_and(JoinHandle::is_finished) {
+            self.handle.take().unwrap().join().ok()
+        } else {
+            None
+        }
+    }
+}
 
 #[allow(clippy::struct_excessive_bools)]
 struct App {
@@ -157,8 +214,12 @@ struct App {
     file: Option<PathBuf>,
     /// Mtime of the savegame file.
     mtime: SystemTime,
+    /// Tells whether we noticed that the file changed. We don't reload the file immediately, we
+    /// wait for the mtime to stay the same for a second, then reload.
+    change_detected: bool,
 
     // Game data.
+    map_loader: MapLoader,
     /// The map of tiles.
     map: Map,
 
@@ -209,11 +270,11 @@ struct App {
     goto_y: String,
 
     /// How to color segments (TODO change to enum).
-    coloring: i32,
+    section_style: i32,
+    /// How to display closed groups (TODO change to enum).
+    closed_group_style: i32,
     /// Whether to highlight hovered groups.
     highlight_hovered_group: bool,
-    /// Whether to highlight open groups only.
-    highlight_open_groups: bool,
 
     show_placements: [bool; 7],
 }
@@ -242,19 +303,18 @@ impl App {
             // 4 int
             let hover_tile = data::INT_;
             let hover_group = data::INT_;
+            let section_style = data::INT_;
+            let closed_group_style = data::INT_;
 
-            let coloring = data::INT_;
-            let highlight_flags = data::INT_;
-
-            let show_score_flags = data::INT_;
-            let pad2 = data::PAD_;
+            // 2 int
+            let highlight_hovered_group = data::INT_;
+            let show_placements = data::INT_;
 
             (size + aspect_ratio + time)
                 + (origin + rotation + inv_scale)
                 + (hover_pos + hover_rotation + pad1)
-                + (hover_tile + hover_group + coloring + highlight_flags)
-                + show_score_flags
-                + pad2
+                + (hover_tile + hover_group + section_style + closed_group_style)
+                + (highlight_hovered_group + show_placements)
         })
         .unwrap();
         gpu.create_buffer(
@@ -311,8 +371,10 @@ impl App {
             file_choose_dialog: FileChooseDialog::default(),
             file: None,
             mtime: SystemTime::now(),
+            change_detected: false,
 
             // Game data.
+            map_loader: MapLoader::default(),
             map,
 
             // Gpu resources.
@@ -344,9 +406,9 @@ impl App {
             // Ui.
             goto_x: String::new(),
             goto_y: String::new(),
-            coloring: 0,
+            section_style: 0,
+            closed_group_style: 1,
             highlight_hovered_group: false,
-            highlight_open_groups: true,
 
             show_placements: [true; 7],
         };
@@ -422,10 +484,11 @@ impl App {
             (true, _, false) => 5,
         };
 
-        self.hover_tile = self.map.tile_index(self.hover_pos);
+        self.hover_tile = self.map.tile_id_at(self.hover_pos);
         self.hover_group = self.hover_tile.and_then(|tile_id| {
             self.map
                 .tile(tile_id)
+                .unwrap()
                 .segments_at(self.hover_rotation)
                 .next()
                 .map(|(segment_id, _)| self.map.group_of(tile_id, segment_id))
@@ -460,17 +523,17 @@ impl App {
             // pad
             *uptr.add(12) = self.hover_tile.map_or(u32::MAX, |x| x.try_into().unwrap());
             *uptr.add(13) = self.hover_group.map_or(u32::MAX, |x| x.try_into().unwrap());
-            *iptr.add(14) = self.coloring;
-            let highlight_flags = i32::from(self.highlight_hovered_group)
-                | (2 * i32::from(self.highlight_open_groups));
-            *iptr.add(15) = highlight_flags;
+            *iptr.add(14) = self.section_style;
+            *iptr.add(15) = self.closed_group_style;
+
+            *iptr.add(16) = i32::from(self.highlight_hovered_group);
 
             let mut show_score_flags = 0;
             for score in 0..7 {
                 show_score_flags |= i32::from(self.show_placements[score]) << score;
                 // TODO i32
             }
-            *iptr.add(16) = show_score_flags;
+            *iptr.add(17) = show_score_flags;
         }
     }
 
@@ -482,31 +545,42 @@ impl App {
         }
     }
 
-    fn load_file(&mut self, file: PathBuf, gpu: &Gpu) {
-        self.file = Some(file.clone());
-        self.mtime = file
-            .metadata()
-            .and_then(|md| md.modified())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-
-        // Load savegame.
-        let mut stream = File::open(file).expect("Failed to open file");
-        let parsed = nrbf_rs::parse_nrbf(&mut stream);
-        let savegame = raw_data::SaveGame::try_from(&parsed).unwrap();
-
-        self.map = Map::from(&savegame);
-        self.tiles_buffer = Self::create_tiles_buffer(gpu, &self.map);
-        self.generate_bind_group(gpu);
-        self.write_tiles(gpu);
-        self.show_placements = [false; 7];
-        if let Some((score, _)) = self.map.best_placements().get(0) {
-            self.show_placements[*score as usize] = true;
+    fn handle_file_dialog(&mut self) {
+        if let Some(file) = self.file_choose_dialog.take_result() {
+            self.file = Some(file);
+            self.mtime = SystemTime::UNIX_EPOCH;
         }
     }
 
-    fn handle_file_dialog(&mut self, gpu: &Gpu) {
-        if let Some(file) = self.file_choose_dialog.take_result() {
-            self.load_file(file, gpu);
+    fn reload_file_if_changed(&mut self) {
+        if let Some(file) = self.file.as_ref() {
+            let actual_mtime = file.metadata().ok().and_then(|md| md.modified().ok());
+            if let Some(actual_mtime) = actual_mtime {
+                if actual_mtime > self.mtime {
+                    self.change_detected = true;
+                    self.mtime = actual_mtime;
+                } else if self.change_detected
+                    && actual_mtime == self.mtime
+                    && SystemTime::now() > actual_mtime + Duration::from_secs(1)
+                {
+                    self.change_detected = false;
+                    self.map_loader.load(file);
+                }
+            }
+        }
+    }
+
+    fn handle_map_loader(&mut self, gpu: &Gpu) {
+        if let Some(map) = self.map_loader.take_result() {
+            self.map = map;
+
+            self.tiles_buffer = Self::create_tiles_buffer(gpu, &self.map);
+            self.generate_bind_group(gpu);
+            self.write_tiles(gpu);
+            self.show_placements = [false; 7];
+            if let Some((score, _)) = self.map.best_placements().iter().last() {
+                self.show_placements[*score as usize] = true;
+            }
         }
     }
 
@@ -517,6 +591,189 @@ impl App {
             self.origin = Vec2::new(x as f32, y as f32);
             self.inv_scale = 30.0;
         }
+    }
+}
+
+fn render_ui(
+    app: &mut App,
+    ctx: &egui::Context,
+    sidebar_expanded: &mut bool,
+    show_tooltip: &mut bool,
+) {
+    // Top panel with title and some menus.
+    egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Dorfromantik viewer");
+            if ui
+                .add_enabled(
+                    !app.file_choose_dialog.is_open(),
+                    egui::Button::new("Load file"),
+                )
+                .clicked()
+            {
+                app.file_choose_dialog.open();
+            }
+            ui.toggle_value(sidebar_expanded, "Visual settings");
+        });
+    });
+
+    // Main config panel.
+    egui::SidePanel::left("left_panel").show_animated(ctx, *sidebar_expanded, |ui| {
+        ui.label(egui::RichText::new("Orientation").size(20.0).underline());
+        ui.horizontal(|ui| {
+            ui.label("Goto");
+            let size = ui.available_size();
+
+            let edit_x = egui::TextEdit::singleline(&mut app.goto_x);
+            ui.add_sized((size.x / 3.0, size.y), edit_x);
+
+            let edit_y = egui::TextEdit::singleline(&mut app.goto_y);
+            let response = ui.add_sized((size.x / 3.0, size.y), edit_y);
+
+            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                app.submit_goto();
+            }
+        });
+        ui.add(egui::Slider::new(&mut app.inv_scale, 5.0..=500.0).text("Zoom out"));
+        ui.add_space(10.0);
+
+        ui.label(egui::RichText::new("Tooltip").size(20.0).underline());
+        ui.checkbox(show_tooltip, "Show tooltip");
+        ui.add_space(10.0);
+
+        ui.label(egui::RichText::new("Section style").size(20.0).underline());
+        ui.selectable_value(&mut app.section_style, 0, "Color by terrain type");
+        ui.selectable_value(&mut app.section_style, 1, "Color by group statically");
+        ui.selectable_value(&mut app.section_style, 2, "Color by group dynamically");
+        ui.selectable_value(&mut app.section_style, 3, "Color by texture");
+        ui.add_space(10.0);
+
+        ui.label(
+            egui::RichText::new("Group display options")
+                .size(20.0)
+                .underline(),
+        );
+        ui.label("Closed groups");
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut app.closed_group_style, 0, "Show");
+            ui.selectable_value(&mut app.closed_group_style, 1, "Dim");
+            ui.selectable_value(&mut app.closed_group_style, 2, "Hide");
+        });
+        ui.checkbox(&mut app.highlight_hovered_group, "Highlight hovered group");
+        ui.add_space(10.0);
+
+        ui.label(
+            egui::RichText::new("Placement display")
+                .size(20.0)
+                .underline(),
+        );
+        egui::Grid::new("placement_options").show(ui, |ui| {
+            ui.label("Score");
+            ui.label("Count");
+            ui.label("Show");
+            ui.end_row();
+
+            for (score, placements) in app.map.best_placements() {
+                if *score < 0 {
+                    continue;
+                }
+                ui.label(format!("{score}"));
+                ui.label(format!("{}", placements.len()));
+                ui.checkbox(&mut app.show_placements[*score as usize], "");
+                ui.end_row();
+            }
+            // ui.label(format!("x: {}, y: {}", app.hover_pos.x, app.hover_pos.y));
+        });
+        ui.add_space(10.0);
+    });
+
+    // Tooltip (hovering close to mouse)
+    if *show_tooltip {
+        if let Some(tile_id) = app.hover_tile {
+            let tile = app.map.tile(tile_id).unwrap();
+            let response = egui::Window::new(format!("Tile {tile_id}"))
+                .movable(false)
+                .collapsible(false)
+                .resizable(false)
+                .current_pos((app.mouse_position.x + 50.0, app.mouse_position.y - 50.0))
+                .show(ctx, |ui| {
+                    egui::Grid::new("tile_data").show(ui, |ui| {
+                        ui.label("Axial position");
+                        ui.label(format!("x: {}, y: {}", app.hover_pos.x, app.hover_pos.y));
+                        ui.end_row();
+
+                        if !tile.segments.is_empty() {
+                            ui.label("Segments");
+                            ui.end_row();
+
+                            ui.label("Terrain");
+                            ui.label("Form");
+                            ui.label("Group");
+                            ui.end_row();
+
+                            for (segment_id, segment) in tile.segments.iter().enumerate() {
+                                ui.label(format!("{:?}", segment.terrain));
+                                ui.label(format!("{:?}", segment.form));
+                                let group = app.map.group_of(tile_id, segment_id);
+                                ui.label(format!("{group}",));
+                                ui.end_row();
+                            }
+                        }
+
+                        ui.label("Quest");
+                        ui.label(format!("{:?}", tile.quest_tile));
+                        ui.end_row();
+                    });
+                });
+
+            if let Some(group_id) = app.hover_group {
+                let group = &app.map.group(group_id);
+                let tile_rect = response.unwrap().response.rect;
+                let pos = (tile_rect.min.x, tile_rect.max.y + 10.0);
+                egui::Window::new(format!("Group {group_id}"))
+                    .movable(false)
+                    .collapsible(false)
+                    .resizable(false)
+                    .current_pos(pos)
+                    .show(ctx, |ui| {
+                        egui::Grid::new("group_data").show(ui, |ui| {
+                            ui.label("Segment count");
+                            ui.label(format!("{}", group.segments.len()));
+                            ui.end_row();
+                            ui.label("Closed");
+                            ui.label(if group.open_edges.is_empty() {
+                                "Yes"
+                            } else {
+                                "No"
+                            });
+                            ui.end_row();
+                        });
+                    });
+            }
+        } else if let Some(tile) = app.map.next_tile().as_ref() {
+            let rotation_scores = (0..6).map(|rotation| {
+                let next = tile.moved_to(app.hover_pos, rotation);
+                app.map.score_of(&next)
+            });
+            egui::Window::new("Placement score")
+                .movable(false)
+                .collapsible(false)
+                .resizable(false)
+                .current_pos((app.mouse_position.x + 50.0, app.mouse_position.y - 50.0))
+                .show(ctx, |ui| {
+                    for (matching_edges, probability_score) in rotation_scores {
+                        ui.label(format!("{matching_edges} {probability_score}",));
+                    }
+                });
+        }
+    }
+
+    if app.map_loader.in_progress() {
+        egui::Area::new("my_area")
+            .anchor(egui::Align2::RIGHT_BOTTOM, (-50.0, -50.0))
+            .show(ctx, |ui| {
+                ui.add(egui::Spinner::default().size(40.0));
+            });
     }
 }
 
@@ -608,182 +865,13 @@ fn run(
             }
             Event::RedrawRequested(_) => {
                 let (paint_jobs, textures_delta) = ui.run(&window, |ctx| {
-                    // egui::CentralPanel::default()
-                    //     .frame(egui::Frame::none().fill(egui::Color32::TRANSPARENT))
-                    egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Dorfromantik viewer");
-                            if ui
-                                .add_enabled(
-                                    !app.file_choose_dialog.is_open(),
-                                    egui::Button::new("Load file"),
-                                )
-                                .clicked()
-                            {
-                                app.file_choose_dialog.open();
-                            }
-                            ui.toggle_value(&mut sidebar_expanded, "Visual settings");
-                        });
-                    });
-                    egui::SidePanel::left("left_panel").show_animated(
-                        ctx,
-                        sidebar_expanded,
-                        |ui| {
-                            ui.label("Visual settings");
-                            ui.horizontal(|ui| {
-                                ui.label("Goto");
-                                let size = ui.available_size();
-
-                                let edit_x = egui::TextEdit::singleline(&mut app.goto_x);
-                                ui.add_sized((size.x / 3.0, size.y), edit_x);
-                                // ui.add(edit_x);
-
-                                let edit_y = egui::TextEdit::singleline(&mut app.goto_y);
-                                let response = ui.add_sized((size.x / 3.0, size.y), edit_y);
-                                // let response = ui.add(edit_y);
-
-                                if response.lost_focus()
-                                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                {
-                                    app.submit_goto();
-                                }
-                            });
-                            ui.add(
-                                egui::Slider::new(&mut app.inv_scale, 5.0..=500.0).text("Zoom out"),
-                            );
-                            ui.checkbox(&mut show_tooltip, "Show tooltip");
-                            ui.label("Coloring of sections:");
-                            ui.selectable_value(&mut app.coloring, 0, "Color by terrain type");
-                            ui.selectable_value(&mut app.coloring, 1, "Color by group statically");
-                            ui.selectable_value(&mut app.coloring, 2, "Color by group dynamically");
-                            ui.selectable_value(&mut app.coloring, 3, "Color by texture");
-                            ui.checkbox(
-                                &mut app.highlight_hovered_group,
-                                "Highlight hovered group",
-                            );
-                            ui.checkbox(&mut app.highlight_open_groups, "Highlight open groups");
-                            ui.label("Placement options");
-                            egui::Grid::new("placement_options").show(ui, |ui| {
-                                ui.label("Score");
-                                ui.label("Count");
-                                ui.label("Show");
-                                ui.end_row();
-
-                                for (score, placements) in app.map.best_placements() {
-                                    if *score < 0 {
-                                        continue;
-                                    }
-                                    ui.label(format!("{score}"));
-                                    ui.label(format!("{}", placements.len()));
-                                    ui.checkbox(&mut app.show_placements[*score as usize], "");
-                                    ui.end_row();
-                                }
-                                // ui.label(format!("x: {}, y: {}", app.hover_pos.x, app.hover_pos.y));
-                            });
-                        },
-                    );
-                    if show_tooltip {
-                        if let Some(tile_id) = app.hover_tile {
-                            let tile = &app.map.tile(tile_id);
-                            let response = egui::Window::new(format!("Tile {tile_id}"))
-                                .movable(false)
-                                .collapsible(false)
-                                .resizable(false)
-                                .current_pos((
-                                    app.mouse_position.x + 50.0,
-                                    app.mouse_position.y - 50.0,
-                                ))
-                                .show(ctx, |ui| {
-                                    egui::Grid::new("tile_data").show(ui, |ui| {
-                                        ui.label("Axial position");
-                                        ui.label(format!(
-                                            "x: {}, y: {}",
-                                            app.hover_pos.x, app.hover_pos.y
-                                        ));
-                                        ui.end_row();
-
-                                        if !tile.segments.is_empty() {
-                                            ui.label("Segments");
-                                            ui.end_row();
-
-                                            ui.label("Terrain");
-                                            ui.label("Form");
-                                            ui.label("Group");
-                                            ui.end_row();
-
-                                            for (segment_id, segment) in
-                                                tile.segments.iter().enumerate()
-                                            {
-                                                ui.label(format!("{:?}", segment.terrain));
-                                                ui.label(format!("{:?}", segment.form));
-                                                let group = app.map.group_of(tile_id, segment_id);
-                                                ui.label(format!("{group}",));
-                                                ui.end_row();
-                                            }
-                                        }
-
-                                        ui.label("Quest");
-                                        ui.label(format!("{:?}", app.map.tile(tile_id).quest_tile));
-                                        ui.end_row();
-                                    });
-                                });
-
-                            if let Some(group_id) = app.hover_group {
-                                let group = &app.map.group(group_id);
-                                let tile_rect = response.unwrap().response.rect;
-                                let pos = (tile_rect.min.x, tile_rect.max.y + 10.0);
-                                egui::Window::new(format!("Group {group_id}"))
-                                    .movable(false)
-                                    .collapsible(false)
-                                    .resizable(false)
-                                    .current_pos(pos)
-                                    .show(ctx, |ui| {
-                                        egui::Grid::new("group_data").show(ui, |ui| {
-                                            ui.label("Segment count");
-                                            ui.label(format!("{}", group.segments.len()));
-                                            ui.end_row();
-                                            ui.label("Closed");
-                                            ui.label(if group.open_edges.is_empty() {
-                                                "Yes"
-                                            } else {
-                                                "No"
-                                            });
-                                            ui.end_row();
-                                        });
-                                    });
-                            }
-                        } else if let Some(tile) = app.map.next_tile().as_ref() {
-                            let rotation_scores = (0..6)
-                                .map(|rotation| {
-                                    let next = tile.moved_to(app.hover_pos, rotation);
-                                    app.map.score_of(&next)
-                                })
-                                .max();
-                            egui::Window::new("Placement score")
-                                .movable(false)
-                                .collapsible(false)
-                                .resizable(false)
-                                .current_pos((
-                                    app.mouse_position.x + 50.0,
-                                    app.mouse_position.y - 50.0,
-                                ))
-                                .show(ctx, |ui| {
-                                    for score in rotation_scores {
-                                        ui.label(format!("{score}"));
-                                    }
-                                });
-                        }
-                    }
+                    // TODO move these bools somewhere....
+                    render_ui(&mut app, ctx, &mut sidebar_expanded, &mut show_tooltip)
                 });
 
-                app.handle_file_dialog(&gpu);
-                if app.file.as_ref().is_some_and(|file| {
-                    file.metadata()
-                        .and_then(|md| md.modified())
-                        .is_ok_and(|mtime| mtime > app.mtime)
-                }) {
-                    app.load_file(app.file.as_ref().unwrap().clone(), &gpu);
-                }
+                app.handle_file_dialog();
+                app.reload_file_if_changed();
+                app.handle_map_loader(&gpu);
                 app.write_view(&gpu);
                 let bind_groups = app.bind_groups.groups.as_ref().map(<[_; 1]>::as_slice);
                 pipeline.redraw(&gpu, bind_groups, &paint_jobs, textures_delta);
@@ -804,4 +892,5 @@ fn main() {
     let ui = Ui::new(&window);
 
     run(event_loop, window, gpu, pipeline, ui, app);
+    dbg!("Exiting");
 }

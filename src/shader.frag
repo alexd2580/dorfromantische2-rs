@@ -35,8 +35,9 @@
 #define COLOR_BY_GROUP_DYNAMIC 2
 #define COLOR_BY_TEXTURE 3
 
-#define HIGHLIGHT_HOVERED_GROUP 1
-#define HIGHLIGHT_OPEN_GROUPS 2
+#define CLOSED_GROUPS_SHOW 0
+#define CLOSED_GROUPS_DIM 1
+#define CLOSED_GROUPS_HIDE 2
 
 /**
  * For reference on shader block layout see:
@@ -105,10 +106,11 @@ layout(std140, binding=0) uniform View {
 
     int hover_tile;
     int hover_group;
-    int coloring;
-    int highlight_flags;
+    int section_style;
+    int closed_group_style;
 
-    uint show_score_flags;
+    int highlight_hovered_group;
+    uint show_placements;
 };
 
 layout(std140, binding=1) readonly buffer Tiles {
@@ -303,7 +305,7 @@ bool is_within_form(vec2 pos, uint form) {
 }
 
 vec3 color_of_score(int score) {
-    if ((show_score_flags & (uint(1) << score)) == 0) {
+    if ((show_placements & (uint(1) << score)) == 0) {
         return vec3(0);
     }
 
@@ -318,6 +320,19 @@ vec3 color_of_score(int score) {
         // case 0: return twice_per_sec * vec3(0.5);
     }
     return vec3(0);
+}
+
+float group_color_factor(bool is_closed) {
+    switch (closed_group_style) {
+    case CLOSED_GROUPS_SHOW:
+        return 1.0;
+    case CLOSED_GROUPS_DIM:
+        return is_closed ? 0.1 : 1.0;
+    case CLOSED_GROUPS_HIDE:
+        return is_closed ? 0.0 : 1.0;
+        break;
+    }
+    return 1.0;
 }
 
 void main() {
@@ -368,7 +383,7 @@ void main() {
         );
 
         if (is_within_form(pos, segment.form)) {
-            switch (coloring) {
+            switch (section_style) {
             case COLOR_BY_TERRAIN:
                 color = color_of_terrain(segment.terrain);
                 break;
@@ -383,15 +398,23 @@ void main() {
                 break;
             }
 
-            bool highlight_hovered = (highlight_flags & HIGHLIGHT_HOVERED_GROUP) != 0;
-            bool highlight_open = (highlight_flags & HIGHLIGHT_OPEN_GROUPS) != 0; // TODO bug here.
-
-            if (highlight_hovered && hover_group != -1 && hover_group != segment.group) {
-                color *= 0.1;
-            } else if (highlight_open && segment.group_is_closed) {
-                color *= 0.1;
+            if (closed_group_style == CLOSED_GROUPS_HIDE && segment.group_is_closed) {
+                color = vec3(0.2);
+                break;
             }
 
+            float factor = group_color_factor(segment.group_is_closed);
+
+            // bool highlight_hovered = highlight_hovered_group != 0;
+            // if (highlight_hovered) {
+            //     bool hovered_group_is_visible = factor > 0.01;
+            //     bool group_is_currently_hovered = hover_group == segment.group;
+            //     if (group_is_currently_hovered && hovered_group_is_visible) {
+            //         factor = 1.0;
+            //     } else if(
+            // }
+
+            color *= factor;
             break;
         }
     }

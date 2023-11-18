@@ -74,7 +74,8 @@ pub enum Terrain {
 
 impl Terrain {
     #[allow(clippy::match_same_arms)]
-    pub fn connects_to(self, terrain: Terrain) -> bool {
+    /// Check whether `self` would connect to a group through a `terrain` edge.
+    pub fn connects_to_group_of(self, terrain: Terrain) -> bool {
         if self == terrain {
             return true;
         }
@@ -96,6 +97,8 @@ impl Terrain {
     #[allow(clippy::match_same_arms)]
     pub fn neighbor_score(self, other: Terrain) -> i32 {
         match (self, other) {
+            // Placing adjacent to missing is ok.
+            (Terrain::Missing, _) | (_, Terrain::Missing) => 0,
             // Empty
             (
                 // Connects with empty, lake and station.
@@ -791,7 +794,7 @@ impl Tile {
         (rotation + 3) % 6
     }
 
-    pub fn neighbor_coordinates_of(pos: IVec2, rotation: Rotation) -> IVec2 {
+    pub fn neighbor_pos_of(pos: IVec2, rotation: Rotation) -> IVec2 {
         match rotation {
             0 => pos + IVec2::new(0, 1),
             1 => pos + IVec2::new(1, 0),
@@ -803,8 +806,8 @@ impl Tile {
         }
     }
 
-    pub fn neighbor_coordinates(&self, rotation: Rotation) -> IVec2 {
-        Tile::neighbor_coordinates_of(self.pos, rotation)
+    pub fn neighbor_pos(&self, rotation: Rotation) -> IVec2 {
+        Tile::neighbor_pos_of(self.pos, rotation)
     }
 
     /// There can be multiple segments at a single rotation due to the station tile.
@@ -815,22 +818,18 @@ impl Tile {
             .filter(move |(_, segment)| segment.rotations().into_iter().any(|r| r == rotation))
     }
 
+    /// There can only be one segment that connects to `terrain`.
+    /// Station tiles uphold that rule.
     pub fn connecting_segment_at(
         &self,
         terrain: Terrain,
         rotation: Rotation,
     ) -> Option<(SegmentId, &Segment)> {
         self.segments_at(rotation)
-            .find(|(_, segment)| segment.terrain.connects_to(terrain))
+            .find(|(_, segment)| segment.terrain.connects_to_group_of(terrain))
     }
 
-    /// What "score" do i get for placing `other` at `rotation`.
-    pub fn placement_score(&self, rotation: Rotation, other: &Tile) -> i32 {
-        let my_terrain = self.parts[rotation];
-        let other_terrain = other.parts[Tile::opposite_side(rotation)];
-        Terrain::neighbor_score(my_terrain, other_terrain)
-    }
-
+    /// Get a tile as if moved to `pos` and rotated by `rotation`.
     pub fn moved_to(&self, pos: IVec2, rotation: Rotation) -> Self {
         Self {
             pos,
@@ -845,5 +844,34 @@ impl Tile {
             parts: [0, 1, 2, 3, 4, 5].map(|index| self.parts[(index + rotation) % 6]),
             quest_tile: self.quest_tile,
         }
+    }
+
+    pub fn canonical_id(&self) -> u32 {
+        (0..6)
+            .map(|rotation| {
+                self.parts[rotation..]
+                    .iter()
+                    .chain(self.parts[0..rotation].iter())
+                    .fold(0, |accum, part| (accum << 4) | *part as u32)
+            })
+            .min()
+            .unwrap()
+    }
+
+    /// Checks every rotation!
+    pub fn is_perfect_placement(inner: &[Terrain; 6], outer: &[Terrain; 6]) -> bool {
+        for rotation_offset in 0..6 {
+            let offset_inner = inner[rotation_offset..]
+                .iter()
+                .chain(inner[0..rotation_offset].iter());
+
+            if offset_inner
+                .zip(outer.iter())
+                .all(|(i, o)| i.neighbor_score(*o) >= 0)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }
