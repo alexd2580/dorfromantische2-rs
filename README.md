@@ -19,8 +19,8 @@ steamapps/compatdata/*/pfx/drive_c/users/steamuser/AppData/LocalLow/Toukana\ Int
 - [ ] Decode preplaced tiles (the coordinate conversion is going to be fun)
 - [ ] Compute probabilities for all tiles
 - [ ] Evaluate best placements based on probability
-- [ ] Fix goto in ui
-- [ ] Improve UI
+- [x] Fix goto in ui
+- [x] Improve UI
 - [ ] Fix tooltip that shows up when mouse is outside window
 - [ ] Highlight big groups
 - [ ] Lerp for goto

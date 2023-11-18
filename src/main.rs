@@ -590,7 +590,7 @@ impl App {
         let x = self.goto_x.parse::<i32>();
         let y = self.goto_y.parse::<i32>();
         if let (Ok(x), Ok(y)) = (x, y) {
-            self.origin = Vec2::new(x as f32, y as f32);
+            self.origin = Self::hex_to_world(IVec2::new(x, y));
             self.inv_scale = 30.0;
         }
     }
