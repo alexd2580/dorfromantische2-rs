@@ -4,6 +4,7 @@ use gpu::{Buffer, Gpu, SizeOrContent};
 use map::{GroupId, Map};
 use pipeline::Pipeline;
 use std::{
+    env,
     fs::File,
     path::{Path, PathBuf},
     thread::JoinHandle,
@@ -570,10 +571,33 @@ impl App {
         }
     }
 
+    fn previous_file_path_cache_path(&self) -> PathBuf {
+        let mut previous_file_path =
+            dirs::cache_dir().expect("There is no cache directory on this system");
+        previous_file_path.push("dorfromantische2-rs/previous_file_path");
+        let _ = std::fs::create_dir_all(previous_file_path.parent().unwrap());
+        previous_file_path
+    }
+
+    pub fn set_file_path(&mut self, file: PathBuf) {
+        self.file = Some(file.clone());
+        self.mtime = SystemTime::UNIX_EPOCH;
+
+        let cache_path = self.previous_file_path_cache_path();
+        std::fs::write(cache_path, file.to_str().unwrap())
+            .expect("Failed to write file path to cache");
+    }
+
+    pub fn use_previous_file_path(&mut self) {
+        let cache_path = self.previous_file_path_cache_path();
+        if let Ok(file_path) = std::fs::read_to_string(cache_path) {
+            self.set_file_path(file_path.into());
+        }
+    }
+
     fn handle_file_dialog(&mut self) {
         if let Some(file) = self.file_choose_dialog.take_result() {
-            self.file = Some(file);
-            self.mtime = SystemTime::UNIX_EPOCH;
+            self.set_file_path(file)
         }
     }
 
@@ -854,7 +878,7 @@ fn run(
     mut ui: Ui,
     mut app: App,
 ) {
-    let mut show_tooltip = true;
+    let mut show_tooltip = false;
     let mut sidebar_expanded = false;
     event_loop.run(move |event, _, control_flow| {
         // What the actual??
@@ -952,9 +976,18 @@ fn main() {
     let event_loop = EventLoop::new();
     let window = winit::window::Window::new(&event_loop).unwrap();
     let gpu = pollster::block_on(Gpu::new(&window));
-    let app = App::new(&window, &gpu);
+    let mut app = App::new(&window, &gpu);
     let pipeline = Pipeline::new(&gpu, &window, &app.bind_groups.layouts);
     let ui = Ui::new(&window);
+
+    // Load the specified or previous file.
+    let arguments = env::args().collect::<Vec<_>>();
+    if arguments.len() > 1 {
+        let file = arguments[1].clone().into();
+        app.set_file_path(file);
+    } else {
+        app.use_previous_file_path();
+    }
 
     run(event_loop, window, gpu, pipeline, ui, app);
     dbg!("Exiting");
