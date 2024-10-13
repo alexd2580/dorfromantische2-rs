@@ -168,8 +168,10 @@ impl MapLoader {
             let path = path.to_owned();
             self.handle = Some(std::thread::spawn(|| {
                 // Load savegame.
-                dbg!("loading savegame");
                 let path = path;
+
+                let start = std::time::Instant::now();
+
                 // Fugly retry mechanism.
                 let parsed = std::panic::catch_unwind(|| {
                     let mut stream = File::open(&path).expect("Failed to open file");
@@ -188,9 +190,23 @@ impl MapLoader {
                     })
                 })
                 .unwrap();
+
+                let tree_loaded = start.elapsed();
+                println!("NRBF Tree loaded in: {:?}", tree_loaded);
+                let start = std::time::Instant::now();
+
                 let savegame = raw_data::SaveGame::try_from(&parsed).unwrap();
-                dbg!("loading map");
-                Map::from(&savegame)
+
+                let save_loaded = start.elapsed();
+                println!("Savegame loaded in: {:?}", save_loaded);
+                let start = std::time::Instant::now();
+
+                let map = Map::from(&savegame);
+
+                let map_loaded = start.elapsed();
+                println!("Map loaded in: {:?}", map_loaded);
+
+                map
             }));
         }
     }

@@ -239,22 +239,31 @@ bool within(float lower, float value, float upper) {
     return lower <= value && value <= upper;
 }
 
+const float vertex_inner = 0.15 * 0.15;
 const float single_inner = 0.35 * 0.35;
 const float single_outer = 1.15 * 1.15;
 const float double_inner = 0.85 * 0.85;
 const float triple_inner = 1.85 * 1.85;
 
+/**
+ * `pos` is relative to the time center, without rotation.
+ * The edges of the hex are 1 in length, and offset by `COS_30`
+ * from the tile center.
+ * x points right, y points up.
+ */
 bool is_within_form(vec2 pos, uint form) {
     // if (pos.y > abs(pos.x * 2 * cos_30)) {
     //     return true;
     // }
     // return false;
 
+    bool vertex = sqr_dist_of(abs(pos), vec2(1, 0)) > vertex_inner && sqr_dist_of(abs(pos), vec2(0.5, COS_30)) > vertex_inner;
+
     switch (form) {
         case FORM_SIZE1:
             return sqr_dist_of(pos, vec2(0, COS_30)) < single_inner;
         case FORM_SIZE2:
-            return sqr_dist_of(pos, vec2(0.5, COS_30)) < double_inner;
+            return vertex && sqr_dist_of(pos, vec2(0.5, COS_30)) < double_inner;
             return pos.y > 0 && pos.y > (-pos.x * 2 * COS_30);
         case FORM_BRIDGE: {
             float sqr_dist = sqr_dist_of(pos, vec2(1.5, COS_30));
@@ -263,15 +272,15 @@ bool is_within_form(vec2 pos, uint form) {
         case FORM_STRAIGHT:
             return abs(pos.x) < 0.35;
         case FORM_SIZE3:
-            return sqr_dist_of(pos, vec2(1.5, COS_30)) < triple_inner;
+            return vertex && sqr_dist_of(pos, vec2(1.5, COS_30)) < triple_inner;
         case FORM_JUNCTION_LEFT: {
             bool bottom_right = sqr_dist_of(pos, vec2(1.5, -COS_30)) > single_outer;
-            return pos.x > -0.35 && bottom_right;
+            return vertex && pos.x > -0.35 && bottom_right;
         }
         case FORM_JUNCTION_RIGHT: {
             bool left_side = sqr_dist_of(pos, vec2(-1.5, COS_30)) > single_outer;
             bool bottom_right = dot(vec2(SIN_30, -COS_30), pos) < 0.35;
-            return left_side && bottom_right;
+            return vertex && left_side && bottom_right;
         }
         case FORM_THREE_WAY: {
             float sqr_dist_lr = sqr_dist_of(vec2(abs(pos.x), pos.y), vec2(1.5, COS_30));
@@ -279,21 +288,21 @@ bool is_within_form(vec2 pos, uint form) {
             return sqr_dist_lr > single_outer && sqr_dist_b > single_outer;
         }
         case FORM_SIZE4:
-            return pos.x > -0.35;
+            return vertex && pos.x > -0.35;
         case FORM_FAN_OUT: {
             float sqr_dist_tl = sqr_dist_of(pos, vec2(-1.5, COS_30));
             float sqr_dist_b = sqr_dist_of(pos, vec2(0, -2 * COS_30));
-            return sqr_dist_tl > single_outer && sqr_dist_b > single_outer;
+            return vertex && sqr_dist_tl > single_outer && sqr_dist_b > single_outer;
         }
         case FORM_X: {
             float sqr_dist_tl = sqr_dist_of(pos, vec2(-1.5, COS_30));
             float sqr_dist_br = sqr_dist_of(pos, vec2(1.5, -COS_30));
-            return sqr_dist_tl > single_outer && sqr_dist_br > single_outer;
+            return vertex && sqr_dist_tl > single_outer && sqr_dist_br > single_outer;
         }
         case FORM_SIZE5:
-            return sqr_dist_of(pos, vec2(-1.5, COS_30)) > single_outer;
+            return vertex && sqr_dist_of(pos, vec2(-1.5, COS_30)) > single_outer;
         case FORM_SIZE6:
-            return true;
+            return vertex;
 
         case FORM_UNKNOWN_102:
         case FORM_UNKNOWN_105:
