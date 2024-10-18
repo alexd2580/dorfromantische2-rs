@@ -26,6 +26,9 @@ mod pipeline;
 mod raw_data;
 mod textures;
 
+mod opencv;
+mod xlib;
+
 struct Ui {
     context: egui::Context,
     state: egui_winit::State,

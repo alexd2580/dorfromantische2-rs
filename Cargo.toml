@@ -26,3 +26,5 @@ image = "0.24.7"
 rfd = "0.12.1"
 glam = "0.24.2"
 dirs = "5.0.1"
+opencv = "0.93.3"
+x11 = { version = "2.21.0", features = ["xlib", "xtest"] }
