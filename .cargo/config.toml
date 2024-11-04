@@ -1,2 +1,5 @@
 [alias]
 lint = ["clippy", "--", "-W", "clippy::pedantic", "-A", "clippy::cast_precision_loss", "-A", "clippy::cast_sign_loss", "-A", "clippy::cast_possible_truncation"]
+
+[env]
+OPENCV_LINK_LIBS = "opencv_core,opencv_imgproc,opencv_imgcodecs"

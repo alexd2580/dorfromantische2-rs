@@ -8,8 +8,7 @@
 #define TERRAIN_RAIL 5
 #define TERRAIN_RIVER 6
 #define TERRAIN_LAKE 7
-#define TERRAIN_RAIL_STATION 8
-#define TERRAIN_LAKE_STATION 9
+#define TERRAIN_STATION 8
 
 #define FORM_SIZE1 0
 #define FORM_SIZE2 1
@@ -60,7 +59,7 @@ struct Tile {
      */
     uvec4 segments_4;
     uvec2 segments_2;
-    int placement_score;
+    int placement_rank;
     int pad_;
 };
 
@@ -104,8 +103,8 @@ layout(std140, binding=0) uniform View {
     int hover_rotation;
     int pad_;
 
-    int hover_tile;
-    int hover_group;
+    uint hover_segment;
+    uint hover_group;
     int section_style;
     int closed_group_style;
 
@@ -207,8 +206,7 @@ vec3 color_of_terrain(uint terrain) {
         return vec3(0, 0, 1);
     case TERRAIN_LAKE:
         return vec3(0.2, 0.2, 1);
-    case TERRAIN_RAIL_STATION:
-    case TERRAIN_LAKE_STATION:
+    case TERRAIN_STATION:
         return vec3(0.5, 0.5, 1);
     default:
         return vec3(1, 0, 1);
@@ -313,13 +311,14 @@ bool is_within_form(vec2 pos, uint form) {
     }
 }
 
-vec3 color_of_score(int score) {
-    if ((show_placements & (uint(1) << score)) == 0) {
+vec3 color_of_score(int index) {
+    if ((show_placements & (uint(1) << index)) == 0) {
         return vec3(0);
     }
 
     float twice_per_sec = 0.5 * sin(2 * 2 * PI * time) + 0.5;
-    switch (score) {
+    return twice_per_sec * vec3(1);
+    switch (index) {
         case 6: return twice_per_sec * vec3(0.9, 0.85, 0);
         case 5: return twice_per_sec * vec3(0.85);
         case 4: return twice_per_sec * vec3(0.8, 0.5, 0.2);
@@ -374,7 +373,7 @@ void main() {
 
         // The segment and the entire tile is empty.
         if (segment.terrain == TERRAIN_MISSING) {
-            color = color_of_score(tile.placement_score);
+            color = color_of_score(tile.placement_rank);
             break;
         }
 
@@ -414,14 +413,14 @@ void main() {
 
             float factor = group_color_factor(segment.group_is_closed);
 
-            // bool highlight_hovered = highlight_hovered_group != 0;
-            // if (highlight_hovered) {
-            //     bool hovered_group_is_visible = factor > 0.01;
-            //     bool group_is_currently_hovered = hover_group == segment.group;
-            //     if (group_is_currently_hovered && hovered_group_is_visible) {
-            //         factor = 1.0;
-            //     } else if(
-            // }
+            bool highlight_hovered = highlight_hovered_group != 0;
+            if (highlight_hovered) {
+                bool hovered_group_is_visible = factor > 0.01;
+                bool group_is_currently_hovered = hover_group == segment.group;
+                if (group_is_currently_hovered && hovered_group_is_visible) {
+                    factor = 1.0;
+                }
+            }
 
             color *= factor;
             break;
