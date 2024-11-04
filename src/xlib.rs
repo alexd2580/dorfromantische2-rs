@@ -18,9 +18,7 @@ impl Screen {
     pub fn new() -> Self {
         unsafe {
             let display: *mut xlib::_XDisplay = xlib::XOpenDisplay(ptr::null());
-            if display.is_null() {
-                panic!("Unable to open X display");
-            }
+            assert!(!display.is_null(), "Unable to open X display");
 
             let screen = xlib::XDefaultScreen(display);
             let root_window = xlib::XRootWindow(display, screen);
@@ -139,6 +137,7 @@ impl Screen {
     //     ).expect("Couldn't convert to ImageBuffer")
     // }
 
+    #[allow(clippy::unused_self)]
     pub fn sleep_ms(&self, ms: u64) {
         thread::sleep(Duration::from_millis(ms));
     }
@@ -165,9 +164,7 @@ impl Screen {
                 &mut mask_return,
             );
 
-            if status == 0 {
-                panic!("Unable to query pointer position");
-            }
+            assert!(status != 0, "Unable to query pointer position");
 
             IVec2::new(root_x, root_y)
         }
@@ -258,7 +255,7 @@ impl Screen {
                 self.focus_window(window);
             }
 
-            let pressed_state = if pressed { 1 } else { 0 };
+            let pressed_state = i32::from(pressed);
             xtest::XTestFakeButtonEvent(self.display, button, pressed_state, xlib::CurrentTime);
             xlib::XFlush(self.display);
         }

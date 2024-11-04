@@ -215,12 +215,12 @@ impl Segment {
         .collect()
     }
 
-    pub fn iter_rotations(&self) -> impl Iterator<Item = Rotation> {
-        self.rotations().into_iter()
-    }
+    // pub fn iter_rotations(&self) -> impl Iterator<Item = Rotation> {
+    //     self.rotations().into_iter()
+    // }
 }
 
-#[allow(clippy::match_same_arms)]
+#[allow(clippy::match_same_arms, clippy::too_many_lines)]
 pub fn segments_from_quest_tile(pos: IVec2, quest_tile: &QuestTile) -> Vec<Segment> {
     let segments = match quest_tile.quest_tile_id.0 {
         // Wheat
@@ -412,6 +412,7 @@ pub fn segments_from_quest_tile(pos: IVec2, quest_tile: &QuestTile) -> Vec<Segme
         .collect()
 }
 
+#[allow(clippy::single_match_else)]
 pub fn segments_from_special_tile_id(pos: IVec2, special_tile_id: &SpecialTileId) -> Vec<Segment> {
     match special_tile_id.0 {
         1 => {

@@ -32,7 +32,7 @@ pub unsafe fn write_map_to(
                 let segment = &map.segments[segment_index];
                 let group_index = groups.assigned_groups[segment_index];
                 let group = &groups.groups[group_index];
-                let is_closed = if group.is_closed() { 1 } else { 0 };
+                let is_closed = u32::from(group.is_closed());
 
                 // Each segment is a uint32.
                 *tptr.add(nth_segment) = segment.terrain as u32
@@ -59,6 +59,8 @@ pub unsafe fn write_map_to(
     }
 }
 
+#[allow(clippy::identity_op)]
+// We use `* 1` to be explicitly explicit.
 pub fn byte_size_for_n_tiles(num_tiles: usize) -> usize {
     // Offset + Size + Tiles (at least one...)
     1 * IVEC2_ + 1 * IVEC2_ + num_tiles.max(1) * TILE_

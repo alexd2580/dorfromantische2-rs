@@ -97,7 +97,7 @@ pub fn render_ui(
                     .iter()
                     .map(|g| format!("{} => {}", g.group_size, g.diff))
                     .collect::<Vec<_>>();
-                ui.label(format!("{:?}", group_diffs));
+                ui.label(format!("{group_diffs:?}"));
                 ui.end_row();
             }
         });

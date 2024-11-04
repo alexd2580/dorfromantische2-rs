@@ -28,7 +28,7 @@ impl PlacementScore {
     fn to_orderable(&self) -> impl Ord {
         (
             !self.split,
-            -(self.mismatched_edges as i8),
+            -i16::from(self.mismatched_edges),
             self.matching_edges,
             // Use the following to prevent duplicate removal.
             self.pos.x,
@@ -50,16 +50,9 @@ impl PartialOrd for PlacementScore {
     }
 }
 
+#[derive(Default)]
 pub struct BestPlacements {
     best_placements: BTreeSet<PlacementScore>,
-}
-
-impl Default for BestPlacements {
-    fn default() -> Self {
-        Self {
-            best_placements: Default::default(),
-        }
-    }
 }
 
 impl BestPlacements {
@@ -81,8 +74,7 @@ impl BestPlacements {
             let other_terrain = map
                 .tile_key(neighbor_pos)
                 .and_then(|key| map.rendered_tiles[key])
-                .map(|neighbor| neighbor[other_side])
-                .unwrap_or(Terrain::Missing);
+                .map_or(Terrain::Missing, |neighbor| neighbor[other_side]);
 
             let is_free = other_terrain == Terrain::Missing;
             match my_terrain.connects_and_matches(other_terrain) {

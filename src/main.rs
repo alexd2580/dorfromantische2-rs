@@ -3,7 +3,7 @@ use glam::{UVec2, Vec2};
 use gpu::Gpu;
 use pipeline::Pipeline;
 use render_ui::render_ui;
-use std::env;
+use std::{env, path::PathBuf};
 use winit::{
     dpi::PhysicalPosition,
     event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent},
@@ -150,7 +150,7 @@ fn run(
             Event::RedrawRequested(_) => {
                 let (paint_jobs, textures_delta) = ui.run(&window, |ctx| {
                     // TODO move these bools somewhere.... TODO what bools?
-                    render_ui(&mut app, ctx, &mut sidebar_expanded, &mut show_tooltip)
+                    render_ui(&mut app, ctx, &mut sidebar_expanded, &mut show_tooltip);
                 });
 
                 app.tick(&gpu);
@@ -175,8 +175,8 @@ fn main() {
     // Load the specified or previous file.
     let arguments = env::args().collect::<Vec<_>>();
     if arguments.len() > 1 {
-        let file = arguments[1].clone().into();
-        app.set_file_path(file);
+        let file = PathBuf::from(&arguments[1]);
+        app.set_file_path(&file);
     } else {
         app.use_previous_file_path();
     }

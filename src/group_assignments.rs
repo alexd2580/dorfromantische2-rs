@@ -27,7 +27,7 @@ impl<'a> GroupAnalyzer<'a> {
     /// Register a new position for either discovery or as a possible placement.
     /// Returns whether the tile exists in the map.
     fn handle_new_pos(&mut self, pos: Pos) -> bool {
-        if self.is_discovered(&pos) {
+        if self.is_discovered(pos) {
             return true;
         }
 
@@ -35,11 +35,11 @@ impl<'a> GroupAnalyzer<'a> {
             // If it exists, then queue it.
             self.pos_queue.push_back(pos);
             self.discovered_pos.insert(pos);
-            return true;
+            true
         } else {
             // If it doesn't, then it's a possible placement.
             self.possible_placements.insert(pos);
-            return false;
+            false
         }
     }
 
@@ -119,8 +119,8 @@ impl<'a> GroupAnalyzer<'a> {
         });
     }
 
-    fn is_discovered(&self, pos: &Pos) -> bool {
-        self.discovered_pos.contains(pos)
+    fn is_discovered(&self, pos: Pos) -> bool {
+        self.discovered_pos.contains(&pos)
     }
 
     pub fn run(&mut self) {
@@ -156,6 +156,7 @@ impl<'a> GroupAnalyzer<'a> {
     }
 }
 
+#[derive(Default)]
 pub struct GroupAssignments {
     /// Positions where tiles can be placed.
     pub possible_placements: HashSet<Pos>,
@@ -165,16 +166,6 @@ pub struct GroupAssignments {
     pub assigned_groups: Vec<GroupIndex>,
 }
 
-impl Default for GroupAssignments {
-    fn default() -> Self {
-        Self {
-            possible_placements: Default::default(),
-            groups: Default::default(),
-            assigned_groups: Default::default(),
-        }
-    }
-}
-
 impl From<&Map> for GroupAssignments {
     fn from(map: &Map) -> Self {
         let mut analyzer = GroupAnalyzer {
@@ -182,12 +173,12 @@ impl From<&Map> for GroupAssignments {
             pos_queue: VecDeque::from([Pos::new(0, 0)]),
             discovered_pos: HashSet::from([Pos::new(0, 0)]),
 
-            segment_queue: Default::default(),
-            discovered_segments: Default::default(),
+            segment_queue: Vec::default(),
+            discovered_segments: HashSet::default(),
 
-            possible_placements: Default::default(),
-            groups: Default::default(),
-            assigned_groups: Default::default(),
+            possible_placements: HashSet::default(),
+            groups: Vec::default(),
+            assigned_groups: Vec::default(),
         };
         analyzer.run();
         Self {

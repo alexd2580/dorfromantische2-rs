@@ -95,13 +95,13 @@ impl MapLoader {
                 .unwrap();
 
                 let tree_loaded = start.elapsed();
-                println!("NRBF Tree loaded in: {:?}", tree_loaded);
+                println!("NRBF Tree loaded in: {tree_loaded:?}");
                 let start = std::time::Instant::now();
 
                 let savegame = raw_data::SaveGame::try_from(&parsed).unwrap();
 
                 let save_loaded = start.elapsed();
-                println!("Savegame loaded in: {:?}", save_loaded);
+                println!("Savegame loaded in: {save_loaded:?}");
                 let start = std::time::Instant::now();
 
                 let map = Map::from(&savegame);
@@ -110,7 +110,7 @@ impl MapLoader {
                 opencv::map_to_img(&map);
 
                 let map_loaded = start.elapsed();
-                println!("Map loaded in: {:?}", map_loaded);
+                println!("Map loaded in: {map_loaded:?}");
 
                 (map, groups, best_placements)
             }));
@@ -242,7 +242,7 @@ impl App {
         gpu.create_buffer(
             "view",
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            SizeOrContent::Size(view_buffer_size),
+            &SizeOrContent::Size(view_buffer_size),
         )
     }
 
@@ -252,7 +252,7 @@ impl App {
         gpu.create_buffer(
             "tiles",
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            SizeOrContent::Size(tiles_buffer_size),
+            &SizeOrContent::Size(tiles_buffer_size),
         )
     }
 
@@ -329,9 +329,9 @@ impl App {
             closed_group_style: 1,
             highlight_hovered_group: false,
 
-            map: Default::default(),
-            group_assignments: Default::default(),
-            best_placements: Default::default(),
+            map: Map::default(),
+            group_assignments: GroupAssignments::default(),
+            best_placements: BestPlacements::default(),
             show_placements: Default::default(),
         };
 
@@ -471,6 +471,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn previous_file_path_cache_path(&self) -> PathBuf {
         let mut previous_file_path =
             dirs::cache_dir().expect("There is no cache directory on this system");
@@ -479,8 +480,8 @@ impl App {
         previous_file_path
     }
 
-    pub fn set_file_path(&mut self, file: PathBuf) {
-        self.file = Some(file.clone());
+    pub fn set_file_path(&mut self, file: &Path) {
+        self.file = Some(file.to_path_buf());
         self.mtime = SystemTime::UNIX_EPOCH;
 
         let cache_path = self.previous_file_path_cache_path();
@@ -491,13 +492,13 @@ impl App {
     pub fn use_previous_file_path(&mut self) {
         let cache_path = self.previous_file_path_cache_path();
         if let Ok(file_path) = std::fs::read_to_string(cache_path) {
-            self.set_file_path(file_path.into());
+            self.set_file_path(&PathBuf::from(file_path));
         }
     }
 
     fn handle_file_dialog(&mut self) {
         if let Some(file) = self.file_choose_dialog.take_result() {
-            self.set_file_path(file)
+            self.set_file_path(&file);
         }
     }
 
@@ -551,10 +552,12 @@ impl App {
 
         self.handle_file_dialog();
         self.reload_file_if_changed();
-        self.handle_map_loader(&gpu);
-        self.write_view(&gpu);
+        self.handle_map_loader(gpu);
+        self.write_view(gpu);
     }
 
+    #[allow(clippy::similar_names)]
+    // Similar names yfix, xfit
     pub fn zoom_fit(&mut self) {
         let offset = self.map.index_offset;
         let size = self.map.index_size;

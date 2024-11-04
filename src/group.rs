@@ -10,9 +10,9 @@ pub struct Group {
 }
 
 impl Group {
-    pub fn size(&self) -> usize {
-        self.segment_indices.len()
-    }
+    // pub fn size(&self) -> usize {
+    //     self.segment_indices.len()
+    // }
 
     pub fn is_closed(&self) -> bool {
         self.open_edges.is_empty()

@@ -32,12 +32,12 @@ pub struct Map {
 impl Default for Map {
     fn default() -> Self {
         Self {
-            index_offset: Default::default(),
-            index_size: Default::default(),
-            tile_index: Default::default(),
-            rendered_tiles: Default::default(),
-            segments: Default::default(),
-            next_tile: Default::default(),
+            index_offset: Pos::default(),
+            index_size: IVec2::default(),
+            tile_index: Vec::default(),
+            rendered_tiles: Vec::default(),
+            segments: Vec::default(),
+            next_tile: Vec::default(),
             rendered_next_tile: [Terrain::Missing; 6],
         }
     }
@@ -211,12 +211,13 @@ impl Map {
     }
 
     fn tile_position(&self, index_key: TileKey) -> Pos {
-        let x = index_key as i32 % self.index_size.x;
-        let y = (index_key as i32 - x) / self.index_size.x;
+        let i32_key = i32::try_from(index_key).unwrap();
+        let x = i32_key % self.index_size.x;
+        let y = (i32_key - x) / self.index_size.x;
         Pos::new(x + self.index_offset.x, y + self.index_offset.y)
     }
 
-    pub fn iter_tile_positions<'a>(&'a self) -> impl Iterator<Item = Pos> + 'a {
+    pub fn iter_tile_positions(&self) -> impl Iterator<Item = Pos> + '_ {
         self.tile_index
             .iter()
             .enumerate()
@@ -234,8 +235,7 @@ impl Map {
 
     pub fn segment_index_at(&self, pos: Pos, rotation: Rotation) -> Option<SegmentIndex> {
         self.segment_indices_at(pos)?
-            .filter(|index| self.segment(*index).rotations().contains(&rotation))
-            .next()
+            .find(|index| self.segment(*index).rotations().contains(&rotation))
     }
 
     pub fn segment(&self, segment_index: SegmentIndex) -> &Segment {
