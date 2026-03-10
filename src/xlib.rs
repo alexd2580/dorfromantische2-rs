@@ -16,6 +16,9 @@ pub struct Screen {
 
 impl Screen {
     pub fn new() -> Self {
+        // SAFETY: X11 FFI calls. XOpenDisplay returns a valid display pointer or null
+        // (asserted below). XDefaultScreen/XRootWindow/XDisplayWidth/XDisplayHeight
+        // are safe given a valid display.
         unsafe {
             let display: *mut xlib::_XDisplay = xlib::XOpenDisplay(ptr::null());
             assert!(!display.is_null(), "Unable to open X display");
@@ -143,6 +146,8 @@ impl Screen {
     }
 
     pub fn get_mouse_position(&self) -> IVec2 {
+        // SAFETY: self.display is a valid X display (checked in new()). All out-params
+        // are stack-allocated and passed by mutable reference.
         unsafe {
             let mut root_return = 0;
             let mut child_return = 0;
@@ -175,6 +180,8 @@ impl Screen {
         let mut win_x: i32 = 0;
         let mut win_y: i32 = 0;
 
+        // SAFETY: self.display is valid. XTranslateCoordinates and XDefaultRootWindow
+        // are safe given a valid display. Out-params are stack-allocated.
         unsafe {
             let pos = self.get_mouse_position();
             let status = xlib::XTranslateCoordinates(
@@ -196,6 +203,7 @@ impl Screen {
     }
 
     fn focus_window(&self, window: xlib::Window) {
+        // SAFETY: self.display is valid, window was obtained from X11 via get_window_under_cursor.
         unsafe {
             xlib::XSetInputFocus(
                 self.display,
@@ -209,6 +217,7 @@ impl Screen {
     }
 
     pub fn warp_mouse(&self, dst: IVec2) {
+        // SAFETY: self.display and root_window are valid. XWarpPointer is safe with valid args.
         unsafe {
             xlib::XWarpPointer(self.display, 0, self.root_window, 0, 0, 0, 0, dst.x, dst.y);
             xlib::XFlush(self.display);
@@ -231,6 +240,8 @@ impl Screen {
         }
     }
 
+    /// # Safety
+    /// Calls XTestQueryExtension FFI. self.display must be a valid X display.
     unsafe fn test_query_extension(&self) -> bool {
         let mut event_base = 0;
         let mut error_base = 0;
@@ -246,6 +257,8 @@ impl Screen {
     }
 
     fn mouse_button(&self, button: u32, pressed: bool) {
+        // SAFETY: self.display is valid. XTest extension is checked before use.
+        // XTestFakeButtonEvent and XFlush are safe with a valid display.
         unsafe {
             if !self.test_query_extension() {
                 eprintln!("XTest extension not available");
@@ -276,6 +289,8 @@ impl Screen {
 
 impl Drop for Screen {
     fn drop(&mut self) {
+        // SAFETY: self.display was opened in new() and is still valid.
+        // XCloseDisplay is the correct cleanup for XOpenDisplay.
         unsafe {
             xlib::XCloseDisplay(self.display);
         }
@@ -283,25 +298,26 @@ impl Drop for Screen {
 }
 
 fn navigate() {
-    // let mut screenshot_dir = dirs::cache_dir().unwrap();
-    // screenshot_dir.push("dorfautomatik");
-    // let _ = std::fs::create_dir_all(screenshot_dir);
+    const MONITOR_WIDTH: i32 = 2560;
+    const MONITOR_HEIGHT: i32 = 1440;
+    const SCROLL_STEPS: usize = 30;
+    const SCROLL_PAUSE_MS: u64 = 2000;
 
     let screen = Screen::new();
-    screen.warp_mouse(IVec2::new(2560 * 3 / 2, 1440 / 2));
+    screen.warp_mouse(IVec2::new(MONITOR_WIDTH * 3 / 2, MONITOR_HEIGHT / 2));
 
-    for _ in 0..30 {
+    for _ in 0..SCROLL_STEPS {
         screen.mouse_click(4);
     }
 
-    screen.sleep_ms(2000);
+    screen.sleep_ms(SCROLL_PAUSE_MS);
 
-    for _ in 0..30 {
+    for _ in 0..SCROLL_STEPS {
         screen.mouse_click(5);
     }
 
-    screen.sleep_ms(2000);
+    screen.sleep_ms(SCROLL_PAUSE_MS);
 
-    screen.warp_mouse(IVec2::new(2560 + 1, 1440 / 2));
-    screen.mouse_drag(1, IVec2::new(2 * 2560 - 1, 1440 / 2), 5.0);
+    screen.warp_mouse(IVec2::new(MONITOR_WIDTH + 1, MONITOR_HEIGHT / 2));
+    screen.mouse_drag(1, IVec2::new(2 * MONITOR_WIDTH - 1, MONITOR_HEIGHT / 2), 5.0);
 }

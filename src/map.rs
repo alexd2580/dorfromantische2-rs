@@ -2,15 +2,19 @@ use std::ops::Range;
 
 use crate::{
     data::{
-        segments_from_quest_tile, segments_from_special_tile_id, Pos, Rotation, Segment, Terrain,
+        segments_from_quest_tile, segments_from_special_tile_id, HEX_SIDES, Pos, Rotation, Segment,
+        Terrain,
     },
     raw_data,
 };
 use glam::IVec2;
 
+/// Index into the spatial tile index (derived from tile position).
 pub type TileKey = usize;
 
+/// Index into the flat segments array.
 pub type SegmentIndex = usize;
+/// Number of segments belonging to a single tile.
 pub type SegmentCount = usize;
 
 pub struct Map {
@@ -22,13 +26,13 @@ pub struct Map {
 
     /// Maps a tile position key to a set of segment indices.
     pub tile_index: Vec<Option<(SegmentIndex, SegmentCount)>>,
-    pub rendered_tiles: Vec<Option<[Option<SegmentIndex>; 6]>>,
+    pub rendered_tiles: Vec<Option<[Option<SegmentIndex>; HEX_SIDES]>>,
     /// Maps a segment id (index in this array) to a segment.
     pub segments: Vec<Segment>,
 
     /// The next tile is also represented by a set of segments.
     pub next_tile: Vec<Segment>,
-    pub rendered_next_tile: [Terrain; 6],
+    pub rendered_next_tile: [Terrain; HEX_SIDES],
 }
 
 impl Default for Map {
@@ -41,7 +45,7 @@ impl Default for Map {
             rendered_tiles: Vec::default(),
             segments: Vec::default(),
             next_tile: Vec::default(),
-            rendered_next_tile: [Terrain::Missing; 6],
+            rendered_next_tile: [Terrain::Missing; HEX_SIDES],
         }
     }
 }
@@ -65,7 +69,7 @@ impl Map {
         // We store the rotation on the segments, not on the tiles.
         let tile_rotation = raw_tile.rotation.try_into().unwrap();
         let rotate = |segment: &mut Segment| {
-            segment.rotation = (segment.rotation + tile_rotation) % 6;
+            segment.rotation = (segment.rotation + tile_rotation) % HEX_SIDES;
         };
 
         // The game stores segments in different ways, either via predefined quest tiles, some
@@ -134,7 +138,7 @@ impl Map {
         index_size: IVec2,
     ) -> (
         Vec<Option<(SegmentIndex, SegmentCount)>>,
-        Vec<Option<[Option<SegmentIndex>; 6]>>,
+        Vec<Option<[Option<SegmentIndex>; HEX_SIDES]>>,
     ) {
         let index_length = usize::try_from(index_size.x * index_size.y).unwrap();
         let mut tile_index = vec![None; index_length];
@@ -144,7 +148,7 @@ impl Map {
             let position_key = Map::tile_key_function(index_offset, index_size, pos).unwrap();
             tile_index[position_key] = Some((segment_base_index, segment_count));
 
-            let mut rendered = [None; 6];
+            let mut rendered = [None; HEX_SIDES];
             for segment_index in segment_base_index..segment_base_index + segment_count {
                 let segment = &segments[segment_index];
                 for rotation in segment.rotations() {
@@ -159,7 +163,7 @@ impl Map {
 
     /// Render the next tile from the tile stack into a per-rotation terrain array.
     fn render_next_tile(next_tile: &[Segment]) -> [Terrain; 6] {
-        let mut rendered = [Terrain::Empty; 6];
+        let mut rendered = [Terrain::Empty; HEX_SIDES];
         for segment in next_tile {
             for rotation in segment.rotations() {
                 rendered[rotation] = segment.terrain;
@@ -241,6 +245,11 @@ impl Map {
         &self.segments[segment_index]
     }
 
+    /// The rotation pointing in the opposite direction.
+    pub fn opposite_side(rotation: Rotation) -> Rotation {
+        (rotation + HEX_SIDES / 2) % HEX_SIDES
+    }
+
     pub fn neighbor_pos_of(pos: Pos, rotation: Rotation) -> Pos {
         pos + match rotation {
             0 => Pos::new(0, 1),
@@ -249,7 +258,7 @@ impl Map {
             3 => Pos::new(0, -1),
             4 => Pos::new(-1, 0),
             5 => Pos::new(-1, 1),
-            _ => panic!("Rotation should be 0-5, got {rotation}"),
+            _ => panic!("Rotation should be 0..{HEX_SIDES}, got {rotation}"),
         }
     }
 }

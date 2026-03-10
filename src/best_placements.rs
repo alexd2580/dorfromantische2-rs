@@ -1,11 +1,13 @@
 use std::{cmp::Ordering, collections::BTreeSet};
 
 use crate::{
-    data::{Pos, Rotation, Terrain},
+    data::{Pos, Rotation, Terrain, HEX_SIDES},
     group::GroupIndex,
     group_assignments::GroupAssignments,
     map::Map,
 };
+
+pub const MAX_SHOWN_PLACEMENTS: usize = 30;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct GroupEdgeAlteration {
@@ -86,10 +88,10 @@ fn evaluate_side(
         .next_tile
         .iter()
         .enumerate()
-        .find(|(_, seg)| seg.contains_rotation((side + 6 - rotation) % 6));
+        .find(|(_, seg)| seg.contains_rotation((side + HEX_SIDES - rotation) % HEX_SIDES));
 
     let neighbor_pos = Map::neighbor_pos_of(pos, side);
-    let other_side = (side + 3) % 6;
+    let other_side = Map::opposite_side(side);
     let other_tile = map
         .tile_key(neighbor_pos)
         .and_then(|key| map.rendered_tiles[key].map(|segments| segments[other_side]));
@@ -139,9 +141,9 @@ fn evaluate_side(
 /// Check whether placing a tile at `pos` would create a split (hole) in the map.
 fn detect_split(map: &Map, pos: Pos) -> bool {
     let mut split_groups = Vec::new();
-    for side in 0..6 {
+    for side in 0..HEX_SIDES {
         let neighbor_pos = Map::neighbor_pos_of(pos, side);
-        let other_side = (side + 3) % 6;
+        let other_side = Map::opposite_side(side);
         let other_tile = map
             .tile_key(neighbor_pos)
             .and_then(|key| map.rendered_tiles[key].map(|segments| segments[other_side]));
@@ -165,9 +167,9 @@ impl BestPlacements {
         let mut mismatched_edges = 0;
         let mut matching_edges = 0;
         let mut empty_segment_blocks = Vec::new();
-        let mut segment_effects = <[SegmentEffects; 6]>::default();
+        let mut segment_effects = <[SegmentEffects; HEX_SIDES]>::default();
 
-        for side in 0..6 {
+        for side in 0..HEX_SIDES {
             evaluate_side(
                 map,
                 groups,
@@ -199,7 +201,7 @@ impl BestPlacements {
             .iter()
             .filter(|score| score.mismatched_edges == 0)
             .rev()
-            .take(30)
+            .take(MAX_SHOWN_PLACEMENTS)
             .enumerate()
     }
 }
@@ -211,7 +213,7 @@ impl From<(&Map, &GroupAssignments)> for BestPlacements {
         let mut best_placements = BTreeSet::default();
 
         for pos in &groups.possible_placements {
-            for rotation in 0..6 {
+            for rotation in 0..HEX_SIDES {
                 if let Some(score) = BestPlacements::score_of_next_at(map, groups, *pos, rotation) {
                     best_placements.insert(score);
                 }

@@ -2,7 +2,7 @@ use bitfield_struct::bitfield;
 
 use crate::{
     best_placements::BestPlacements,
-    data::{Terrain, IVEC2_, IVEC4_},
+    data::{Terrain, HEX_SIDES, IVEC2_, IVEC4_},
     group_assignments::GroupAssignments,
     map::Map,
 };
@@ -25,11 +25,17 @@ struct PackedSegment {
 
 #[repr(C)]
 struct PackedTile {
-    segments: [PackedSegment; 6],
+    segments: [PackedSegment; HEX_SIDES],
     placement_rank: i32,
     _pad: u32,
 }
 
+/// Write the map data into a GPU buffer at `ptr`.
+///
+/// # Safety
+///
+/// `ptr` must point to a buffer of at least `byte_size(map)` bytes,
+/// be valid for writes, and be properly aligned for `i32` / `PackedTile`.
 #[allow(clippy::similar_names, clippy::cast_ptr_alignment)]
 pub unsafe fn write_map_to(
     ptr: *mut u8,
@@ -63,7 +69,7 @@ pub unsafe fn write_map_to(
                 packed_segment.set_is_closed(group.is_closed());
                 packed_segment.set_group_index(group_index as u32);
             }
-            if segment_count < 6 {
+            if segment_count < HEX_SIDES {
                 tile.segments[segment_count].set_terrain(Terrain::Empty as u8);
             }
         } else {

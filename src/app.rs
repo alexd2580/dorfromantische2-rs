@@ -9,7 +9,7 @@ use glam::{IVec2, UVec2, Vec2};
 use winit::window::Window;
 
 use crate::{
-    best_placements::BestPlacements,
+    best_placements::{BestPlacements, MAX_SHOWN_PLACEMENTS},
     bind_groups::BindGroups,
     data::{Pos, Rotation},
     gpu::{Buffer, Gpu, SizeOrContent},
@@ -20,6 +20,12 @@ use crate::{
     opencv, raw_data, shader,
     textures::Textures,
 };
+
+const MIN_ZOOM: f32 = 5.0;
+const MAX_ZOOM: f32 = 500.0;
+const DEFAULT_ZOOM: f32 = 20.0;
+const GOTO_ZOOM: f32 = 30.0;
+const INITIAL_SHOWN_PLACEMENTS: usize = 5;
 
 #[derive(Default)]
 pub struct FileChooseDialog {
@@ -147,7 +153,7 @@ pub struct App {
     map: Map,
     group_assignments: GroupAssignments,
     pub best_placements: BestPlacements,
-    pub show_placements: [bool; 30],
+    pub show_placements: [bool; MAX_SHOWN_PLACEMENTS],
 
     // Gpu resources.
     /// Set of textures.
@@ -306,7 +312,7 @@ impl App {
             // World info.
             origin: Interpolated::new(Vec2::ZERO),
             rotation: 0.0,
-            inv_scale: Interpolated::new(20.0),
+            inv_scale: Interpolated::new(DEFAULT_ZOOM),
 
             hover_pos: IVec2::ZERO,
             hover_rotation: 0,
@@ -409,12 +415,14 @@ impl App {
     }
 
     pub fn on_scroll(&mut self, y: f32) {
-        self.inv_scale.set(5f32.max(*self.inv_scale - y).min(500.0));
+        self.inv_scale.set(MIN_ZOOM.max(*self.inv_scale - y).min(MAX_ZOOM));
     }
 
     #[allow(clippy::cast_ptr_alignment, clippy::similar_names)]
     fn write_view(&self, gpu: &Gpu) {
         let mut buffer_view = self.view_buffer.write(gpu);
+        // SAFETY: The buffer was created with size_of::<PackedView>(), so the cast
+        // is within bounds. PackedView is #[repr(C)] ensuring a stable layout.
         unsafe {
             let view = &mut *buffer_view.as_mut_ptr().cast::<PackedView>();
             view.size = (self.size.x as i32, self.size.y as i32);
@@ -440,6 +448,8 @@ impl App {
 
     fn write_tiles(&self, gpu: &Gpu) {
         let mut buffer_view = self.tiles_buffer.write(gpu);
+        // SAFETY: The buffer was created with shader::byte_size() bytes, which
+        // accounts for the header and all tiles. write_map_to writes within those bounds.
         unsafe {
             let ptr = buffer_view.as_mut_ptr();
             shader::write_map_to(
@@ -505,8 +515,8 @@ impl App {
             self.map = map;
             self.group_assignments = groups;
             self.best_placements = best_placements;
-            self.show_placements = [false; 30];
-            (0..5).for_each(|i| {
+            self.show_placements = [false; MAX_SHOWN_PLACEMENTS];
+            (0..INITIAL_SHOWN_PLACEMENTS).for_each(|i| {
                 self.show_placements[i] = true;
             });
             self.zoom_fit();
@@ -522,7 +532,7 @@ impl App {
 
     pub fn goto(&mut self, pos: Pos) {
         self.origin.set_target(Self::hex_to_world(pos));
-        self.inv_scale.set_target(30.0);
+        self.inv_scale.set_target(GOTO_ZOOM);
     }
 
     pub fn submit_goto(&mut self) {

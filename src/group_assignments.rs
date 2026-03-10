@@ -1,7 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 
 use crate::{
-    data::{Pos, Terrain},
+    data::{Pos, Terrain, HEX_SIDES},
     group::{Group, GroupIndex},
     map::{Map, SegmentIndex},
 };
@@ -76,7 +76,7 @@ impl<'a> GroupAnalyzer<'a> {
             segment_indices.insert(segment_index);
 
             let segment = self.map.segment(segment_index);
-            for rotation in 0..6 {
+            for rotation in 0..HEX_SIDES {
                 let neighbor_pos = Map::neighbor_pos_of(segment.pos, rotation);
                 let neighbor_exists = self.handle_new_pos(neighbor_pos);
 
@@ -92,7 +92,7 @@ impl<'a> GroupAnalyzer<'a> {
                 }
 
                 // Neighbor exists and it's relevant (pos is already registered).
-                let back_rotation = (rotation + 3) % 6;
+                let back_rotation = Map::opposite_side(rotation);
                 self.map
                     .segment_indices_at(neighbor_pos)
                     .unwrap()
@@ -132,7 +132,7 @@ impl<'a> GroupAnalyzer<'a> {
             // `discover_group`.
             if segment_indices.is_empty() {
                 // Add all yet undiscovered neighbors to the queue.
-                for rotation in 0..6 {
+                for rotation in 0..HEX_SIDES {
                     let neighbor_pos = Map::neighbor_pos_of(pos, rotation);
                     self.handle_new_pos(neighbor_pos);
                 }

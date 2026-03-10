@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use crate::{data::Pos, map::SegmentIndex};
 
+/// Index into the groups array, identifying a connected terrain group.
 pub type GroupIndex = usize;
 
 pub struct Group {

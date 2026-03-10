@@ -2,7 +2,9 @@ use glam::IVec2;
 
 use crate::raw_data::{self, QuestTile, SpecialTileId};
 
-pub const _BOOL_: usize = 4;
+/// Number of sides on a hexagonal tile.
+pub const HEX_SIDES: usize = 6;
+
 pub const INT_: usize = 4;
 pub const IVEC2_: usize = 2 * INT_;
 pub const IVEC4_: usize = 4 * INT_;
@@ -129,10 +131,12 @@ impl From<&raw_data::GroupTypeId> for Terrain {
 }
 
 /// Use flat-top axial coordinates.
-/// x -> 2 o'cock
+/// x -> 2 o'clock
 /// y -> north
 /// Offset coordinates are stupid and complex.
 pub type Pos = IVec2;
+
+/// Hex tile rotation index (0..HEX_SIDES). 0 = north, increasing clockwise.
 pub type Rotation = usize;
 
 #[derive(Debug, Clone)]
@@ -179,7 +183,7 @@ impl From<(&raw_data::Segment, Pos, Rotation)> for Segment {
             pos,
             form,
             terrain,
-            rotation: (raw_rotation + tile_rotation) % 6,
+            rotation: (raw_rotation + tile_rotation) % HEX_SIDES,
         }
     }
 }
@@ -207,7 +211,7 @@ impl Segment {
             Form::LakeSize5 => &[],
         }
         .iter()
-        .map(|local| (self.rotation + local) % 6)
+        .map(|local| (self.rotation + local) % HEX_SIDES)
     }
 
     pub fn contains_rotation(&self, rotation: Rotation) -> bool {

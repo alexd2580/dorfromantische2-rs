@@ -41,6 +41,8 @@ impl Gpu {
     pub async fn new(window: &Window) -> Self {
         let instance = wgpu::Instance::default();
 
+        // SAFETY: The window handle is valid for the lifetime of the Gpu struct,
+        // which owns the surface. The window outlives the event loop.
         let surface = unsafe { instance.create_surface(&window) }.unwrap();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
