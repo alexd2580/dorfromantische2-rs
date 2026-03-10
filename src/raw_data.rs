@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use nrbf_rs::value::Value;
 
 fn expected_got<T>(expected: &str, got: &str) -> Result<T, String> {
@@ -39,13 +37,13 @@ fn filter_none<T>(vec: Vec<Maybe<T>>) -> Vec<T> {
 fn try_object_from<'a>(
     expected_class: &str,
     value: &'a Value,
-) -> Result<&'a HashMap<String, Value>, String> {
+) -> Result<&'a [(String, Value)], String> {
     if let Value::Object(class_name, values) = value {
         if class_name != expected_class {
             return expected_got(expected_class, class_name);
         }
 
-        Ok(values)
+        Ok(values.as_slice())
     } else {
         expected_got(expected_class, &value.to_string())
     }
@@ -54,13 +52,13 @@ fn try_object_from<'a>(
 fn try_prefix_object_from<'a>(
     class_prefix: &str,
     value: &'a Value,
-) -> Result<&'a HashMap<String, Value>, String> {
+) -> Result<&'a [(String, Value)], String> {
     if let Value::Object(class_name, values) = value {
         if !class_name.starts_with(class_prefix) {
             return expected_got(class_prefix, class_name);
         }
 
-        Ok(values)
+        Ok(values.as_slice())
     } else {
         expected_got(class_prefix, &value.to_string())
     }
@@ -81,12 +79,16 @@ impl<T: for<'a> TryFrom<&'a Value, Error = String>> TryFrom<&Value> for GenericL
     }
 }
 
-fn try_key_of<'a>(values: &'a HashMap<String, Value>, key: &str) -> Result<&'a Value, String> {
-    values.get(key).ok_or(format!("No {key} field in object"))
+fn try_key_of<'a>(values: &'a [(String, Value)], key: &str) -> Result<&'a Value, String> {
+    values
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v)
+        .ok_or_else(|| format!("No {key} field in object"))
 }
 
 fn try_key_as<'a, T: TryFrom<&'a Value, Error = std::string::String>>(
-    values: &'a HashMap<String, Value>,
+    values: &'a [(String, Value)],
     key: &str,
 ) -> Result<T, String> {
     T::try_from(try_key_of(values, key)?)
@@ -98,7 +100,7 @@ fn from_id_object(expected_class: &str, value: &Value) -> Result<i32, String> {
 }
 
 #[derive(Debug)]
-struct ChallengeId(i32);
+pub struct ChallengeId(pub i32);
 
 impl TryFrom<&Value> for ChallengeId {
     type Error = String;
@@ -236,32 +238,32 @@ impl TryFrom<&Value> for PreplacedTile {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct SaveGame {
-    game_mode: GameModeId,
-    level: i32,
-    score: i32,
-    perfect_placements: i32,
-    quests_fulfilled: i32,
-    quests_failed: i32,
-    consecutive_perfect_fits: i32,
-    consecutive_placements_without_rotate: i32,
-    playtime: f32,
-    biome_seed: i32,
-    preplaced_tile_seed: i32,
-    placed_tile_count: i32,
-    generated_tile_count: i32,
-    generated_quest_count: i32,
-    surrounded_tiles_count: i32,
+    pub game_mode: GameModeId,
+    pub level: i32,
+    pub score: i32,
+    pub perfect_placements: i32,
+    pub quests_fulfilled: i32,
+    pub quests_failed: i32,
+    pub consecutive_perfect_fits: i32,
+    pub consecutive_placements_without_rotate: i32,
+    pub playtime: f32,
+    pub biome_seed: i32,
+    pub preplaced_tile_seed: i32,
+    pub placed_tile_count: i32,
+    pub generated_tile_count: i32,
+    pub generated_quest_count: i32,
+    pub surrounded_tiles_count: i32,
     pub tiles: Vec<Tile>,
     pub tile_stack: Vec<Tile>,
     pub preplaced_tiles: Vec<PreplacedTile>,
-    pending_locked_challenges: Vec<ChallengeId>,
-    tile_stack_count: i32,
-    file_name: Option<String>,
-    initial_version: String,
-    last_played_version: String,
-    last_rewarded_step: Vec<i32>,
-    last_rewarded_score: Vec<i32>,
-    version: i32,
+    pub pending_locked_challenges: Vec<ChallengeId>,
+    pub tile_stack_count: i32,
+    pub file_name: Option<String>,
+    pub initial_version: String,
+    pub last_played_version: String,
+    pub last_rewarded_step: Vec<i32>,
+    pub last_rewarded_score: Vec<i32>,
+    pub version: i32,
 }
 
 impl TryFrom<&Value> for SaveGame {
@@ -320,7 +322,7 @@ impl TryFrom<&Value> for SaveGame {
 }
 
 #[derive(Debug)]
-struct GameModeId(i32);
+pub struct GameModeId(pub i32);
 
 impl TryFrom<&Value> for GameModeId {
     type Error = String;
