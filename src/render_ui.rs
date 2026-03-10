@@ -1,12 +1,9 @@
+use egui::{Label, Sense};
+
 use crate::App;
 
-pub fn render_ui(
-    app: &mut App,
-    ctx: &egui::Context,
-    sidebar_expanded: &mut bool,
-    show_tooltip: &mut bool,
-) {
-    // Top panel with title and some menus.
+/// Top panel with title and some menus.
+fn render_top_panel(app: &mut App, ctx: &egui::Context, sidebar_expanded: &mut bool) {
     egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
         ui.horizontal(|ui| {
             ui.label("Dorfromantik viewer");
@@ -22,8 +19,15 @@ pub fn render_ui(
             ui.toggle_value(sidebar_expanded, "Visual settings");
         });
     });
+}
 
-    // Main config panel.
+/// Main config panel.
+fn render_side_panel(
+    app: &mut App,
+    ctx: &egui::Context,
+    sidebar_expanded: &mut bool,
+    show_tooltip: &mut bool,
+) {
     egui::SidePanel::left("left_panel").show_animated(ctx, *sidebar_expanded, |ui| {
         ui.label(egui::RichText::new("Orientation").size(20.0).underline());
         ui.horizontal(|ui| {
@@ -83,13 +87,19 @@ pub fn render_ui(
         );
         egui::Grid::new("placement_options").show(ui, |ui| {
             ui.label("Show");
+            ui.label("Pos");
             ui.label("Split");
             ui.label("Matched");
             ui.label("Group diffs");
             ui.end_row();
 
+            let mut clicked_row = None;
             for (rank, score) in app.best_placements.iter_usable() {
                 ui.checkbox(&mut app.show_placements[rank], "");
+                let label = Label::new(format!("{}", score.pos));
+                if ui.add(label.sense(Sense::click())).clicked() {
+                    clicked_row = Some(score.pos);
+                }
                 ui.label(format!("{}", score.split));
                 ui.label(format!("{}", score.matching_edges));
                 let group_diffs = score
@@ -100,10 +110,20 @@ pub fn render_ui(
                 ui.label(format!("{group_diffs:?}"));
                 ui.end_row();
             }
+            if let Some(pos) = clicked_row {
+                app.goto(pos);
+            }
         });
         ui.add_space(10.0);
     });
+}
 
+fn render_tooltip(
+    app: &mut App,
+    ctx: &egui::Context,
+    sidebar_expanded: &mut bool,
+    show_tooltip: &mut bool,
+) {
     // Tooltip (hovering close to mouse)
     if *show_tooltip {
         if let Some(segment_index) = app.hover_segment {
@@ -183,7 +203,9 @@ pub fn render_ui(
             //     });
         }
     }
+}
 
+fn render_map_loader(app: &mut App, ctx: &egui::Context) {
     if app.map_loader.in_progress() {
         egui::Area::new("my_area")
             .anchor(egui::Align2::RIGHT_BOTTOM, (-50.0, -50.0))
@@ -191,4 +213,16 @@ pub fn render_ui(
                 ui.add(egui::Spinner::default().size(40.0));
             });
     }
+}
+
+pub fn render_ui(
+    app: &mut App,
+    ctx: &egui::Context,
+    sidebar_expanded: &mut bool,
+    show_tooltip: &mut bool,
+) {
+    render_top_panel(app, ctx, sidebar_expanded);
+    render_side_panel(app, ctx, sidebar_expanded, show_tooltip);
+    // render_tooltip
+    render_map_loader(app, ctx);
 }

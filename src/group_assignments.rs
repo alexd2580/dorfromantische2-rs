@@ -76,14 +76,12 @@ impl<'a> GroupAnalyzer<'a> {
             segment_indices.insert(segment_index);
 
             let segment = self.map.segment(segment_index);
-            let connecting_rotations = segment.rotations();
-
             for rotation in 0..6 {
                 let neighbor_pos = Map::neighbor_pos_of(segment.pos, rotation);
                 let neighbor_exists = self.handle_new_pos(neighbor_pos);
 
                 // If the rotation does not extend that way, then ignore.
-                let edge_is_relevant = connecting_rotations.contains(&rotation);
+                let edge_is_relevant = segment.contains_rotation(rotation);
                 if !edge_is_relevant {
                     continue;
                 }
@@ -104,7 +102,7 @@ impl<'a> GroupAnalyzer<'a> {
                         }
                         let neighbor = self.map.segment(index);
 
-                        if neighbor.rotations().contains(&back_rotation)
+                        if neighbor.contains_rotation(back_rotation)
                             && neighbor.terrain.extends_group_of(group_terrain)
                         {
                             self.discovered_segments.insert((index, group_terrain));
@@ -181,6 +179,7 @@ impl From<&Map> for GroupAssignments {
             assigned_groups: Vec::default(),
         };
         analyzer.run();
+        dbg!(analyzer.groups.len());
         Self {
             possible_placements: analyzer.possible_placements,
             groups: analyzer.groups,

@@ -11,7 +11,7 @@ use winit::window::Window;
 use crate::{
     best_placements::BestPlacements,
     bind_groups::BindGroups,
-    data::{self, Rotation},
+    data::{Pos, Rotation},
     gpu::{Buffer, Gpu, SizeOrContent},
     group::GroupIndex,
     group_assignments::GroupAssignments,
@@ -201,44 +201,35 @@ pub struct App {
     pub highlight_hovered_group: bool,
 }
 
+#[repr(C)]
+struct PackedView {
+    size: (i32, i32),
+    aspect_ratio: f32,
+    time: f32,
+
+    origin: (f32, f32),
+    rotation: f32,
+    inv_scale: f32,
+
+    hover_pos: (i32, i32),
+    hover_rotation: i32,
+    pad_: i32,
+
+    hover_segment: u32,
+    hover_group: u32,
+    section_style: i32,
+    closed_group_style: i32,
+
+    highlight_hovered_group: i32,
+    show_placements: u32,
+}
+
 const SIN_30: f32 = 0.5;
 const COS_30: f32 = 0.866_025_4;
 
 impl App {
     fn create_view_buffer(gpu: &Gpu) -> Buffer {
-        let view_buffer_size = u64::try_from({
-            // 2 int + 2 float
-            let size = data::IVEC2_;
-            let aspect_ratio = data::FLOAT_;
-            let time = data::FLOAT_;
-
-            // 4 float
-            let origin = data::VEC2_;
-            let rotation = data::FLOAT_;
-            let inv_scale = data::FLOAT_;
-
-            // 4 int
-            let hover_pos = data::IVEC2_;
-            let hover_rotation = data::INT_;
-            let pad1 = data::PAD_;
-
-            // 4 int
-            let hover_tile = data::INT_;
-            let hover_group = data::INT_;
-            let section_style = data::INT_;
-            let closed_group_style = data::INT_;
-
-            // 2 int
-            let highlight_hovered_group = data::INT_;
-            let show_placements = data::INT_;
-
-            (size + aspect_ratio + time)
-                + (origin + rotation + inv_scale)
-                + (hover_pos + hover_rotation + pad1)
-                + (hover_tile + hover_group + section_style + closed_group_style)
-                + (highlight_hovered_group + show_placements)
-        })
-        .unwrap();
+        let view_buffer_size = std::mem::size_of::<PackedView>() as u64;
         gpu.create_buffer(
             "view",
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -410,7 +401,8 @@ impl App {
 
         self.hover_segment = self
             .map
-            .segment_index_at(self.hover_pos, self.hover_rotation);
+            .segment_at(self.hover_pos, self.hover_rotation)
+            .map(|(i, _)| i);
         self.hover_group = self
             .hover_segment
             .and_then(|segment_index| self.group_assignments.group_of(segment_index));
@@ -424,37 +416,25 @@ impl App {
     fn write_view(&self, gpu: &Gpu) {
         let mut buffer_view = self.view_buffer.write(gpu);
         unsafe {
-            let ptr = buffer_view.as_mut_ptr();
-
-            let uptr = ptr.cast::<u32>();
-            let iptr = ptr.cast::<i32>();
-            let fptr = ptr.cast::<f32>();
-
-            *uptr.add(0) = self.size.x;
-            *uptr.add(1) = self.size.y;
-            *fptr.add(2) = self.aspect_ratio;
-            *fptr.add(3) = self.elapsed_secs();
-            *fptr.add(4) = self.origin.x;
-            *fptr.add(5) = self.origin.y;
-            *fptr.add(6) = self.rotation;
-            *fptr.add(7) = *self.inv_scale;
-            *iptr.add(8) = self.hover_pos.x;
-            *iptr.add(9) = self.hover_pos.y;
-            *uptr.add(10) = self.hover_rotation as u32;
-            // pad
-            // *uptr.add(12) = self.hover_tile.map_or(u32::MAX, |x| x.try_into().unwrap());
-            *uptr.add(13) = self.hover_group.map_or(u32::MAX, |x| x.try_into().unwrap());
-            *iptr.add(14) = self.section_style;
-            *iptr.add(15) = self.closed_group_style;
-
-            *iptr.add(16) = i32::from(self.highlight_hovered_group);
+            let view = &mut *buffer_view.as_mut_ptr().cast::<PackedView>();
+            view.size = (self.size.x as i32, self.size.y as i32);
+            view.aspect_ratio = self.aspect_ratio;
+            view.time = self.elapsed_secs();
+            view.origin = (self.origin.x, self.origin.y);
+            view.rotation = self.rotation;
+            view.inv_scale = *self.inv_scale;
+            view.hover_pos = (self.hover_pos.x, self.hover_pos.y);
+            view.hover_rotation = self.hover_rotation as i32;
+            view.hover_group = self.hover_group.map_or(u32::MAX, |x| x.try_into().unwrap());
+            view.section_style = self.section_style;
+            view.closed_group_style = self.closed_group_style;
+            view.highlight_hovered_group = i32::from(self.highlight_hovered_group);
 
             let mut show_score_flags = 0;
-            for (index, show) in self.show_placements.iter().enumerate().take(15) {
-                show_score_flags |= i32::from(*show) << index;
-                // TODO i32
+            for (index, show) in self.show_placements.iter().enumerate() {
+                show_score_flags |= u32::from(*show) << index;
             }
-            *iptr.add(17) = show_score_flags;
+            view.show_placements = show_score_flags;
         }
     }
 
@@ -525,7 +505,10 @@ impl App {
             self.map = map;
             self.group_assignments = groups;
             self.best_placements = best_placements;
-            self.show_placements = [true; 30];
+            self.show_placements = [false; 30];
+            (0..5).for_each(|i| {
+                self.show_placements[i] = true;
+            });
             self.zoom_fit();
 
             let map_byte_size = shader::byte_size(&self.map);
@@ -537,12 +520,16 @@ impl App {
         }
     }
 
+    pub fn goto(&mut self, pos: Pos) {
+        self.origin.set_target(Self::hex_to_world(pos));
+        self.inv_scale.set_target(30.0);
+    }
+
     pub fn submit_goto(&mut self) {
         let x = self.goto_x.parse::<i32>();
         let y = self.goto_y.parse::<i32>();
         if let (Ok(x), Ok(y)) = (x, y) {
-            self.origin.set_target(Self::hex_to_world(IVec2::new(x, y)));
-            self.inv_scale.set_target(30.0);
+            self.goto(Pos::new(x, y));
         }
     }
 
@@ -559,13 +546,24 @@ impl App {
     #[allow(clippy::similar_names)]
     // Similar names yfix, xfit
     pub fn zoom_fit(&mut self) {
+        // let offset = self.map.index_offset;
+        // let size = self.map.index_size;
+        //
+        // self.origin.set_target(App::hex_to_world(offset + size / 2));
+        //
+        // let xfit = 0.5 + size.x as f32 * 1.5;
+        // let yfit = (1 + size.y) as f32 * COS_30;
+        //
+        // self.inv_scale.set_target(xfit.max(yfit));
+
         let offset = self.map.index_offset;
         let size = self.map.index_size;
+        let y_extents = self.map.world_y_extents;
+        let center = Pos::new(offset.x + size.x / 2, (y_extents.y + y_extents.x) / 2);
+        self.origin.set_target(App::hex_to_world(center));
 
-        self.origin.set_target(App::hex_to_world(offset + size / 2));
-
-        let xfit = 0.5 + size.x as f32 * 1.5;
-        let yfit = (1 + size.y) as f32 * COS_30;
+        let xfit = (size.x as f32 * 1.5) / self.aspect_ratio;
+        let yfit = (y_extents.y - y_extents.x) as f32 * 2.0 * COS_30;
 
         self.inv_scale.set_target(xfit.max(yfit));
     }

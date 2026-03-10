@@ -2,12 +2,8 @@ use glam::IVec2;
 
 use crate::raw_data::{self, QuestTile, SpecialTileId};
 
-pub const PAD_: usize = 4;
 pub const _BOOL_: usize = 4;
 pub const INT_: usize = 4;
-pub const FLOAT_: usize = 4;
-pub const VEC2_: usize = 2 * FLOAT_;
-pub const _VEC3_: usize = 3 * FLOAT_ + PAD_;
 pub const IVEC2_: usize = 2 * INT_;
 pub const IVEC4_: usize = 4 * INT_;
 
@@ -190,7 +186,7 @@ impl From<(&raw_data::Segment, Pos, Rotation)> for Segment {
 
 impl Segment {
     #[allow(clippy::match_same_arms)]
-    pub fn rotations(&self) -> Vec<Rotation> {
+    pub fn rotations(&self) -> impl Iterator<Item = Rotation> + '_ {
         match self.form {
             Form::Size1 => [0].as_slice(),
             Form::Size2 => &[0, 1],
@@ -212,12 +208,11 @@ impl Segment {
         }
         .iter()
         .map(|local| (self.rotation + local) % 6)
-        .collect()
     }
 
-    // pub fn iter_rotations(&self) -> impl Iterator<Item = Rotation> {
-    //     self.rotations().into_iter()
-    // }
+    pub fn contains_rotation(&self, rotation: Rotation) -> bool {
+        self.rotations().find(|r| r == &rotation).is_some()
+    }
 }
 
 #[allow(clippy::match_same_arms, clippy::too_many_lines)]

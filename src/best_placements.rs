@@ -2,14 +2,14 @@ use std::{cmp::Ordering, collections::BTreeSet};
 
 use crate::{
     data::{Pos, Rotation, Terrain},
+    group::GroupIndex,
     group_assignments::GroupAssignments,
     map::Map,
 };
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct GroupEdgeAlteration {
-    pub group_size: usize,
-    open_edges: usize,
+    pub size: usize,
     pub diff: i8,
 }
 
@@ -55,7 +55,15 @@ pub struct BestPlacements {
     best_placements: BTreeSet<PlacementScore>,
 }
 
+#[derive(Default)]
+struct SegmentEffects {
+    connects_to: Vec<GroupIndex>,
+    blocks: Vec<GroupIndex>,
+    opens_edges: i32,
+}
+
 impl BestPlacements {
+    // Test a single placement option.
     fn score_of_next_at(
         map: &Map,
         groups: &GroupAssignments,
@@ -65,33 +73,79 @@ impl BestPlacements {
         let mut split_groups = Vec::new();
         let mut mismatched_edges = 0;
         let mut matching_edges = 0;
-        let group_edge_alterations = Vec::new();
 
+        let mut empty_segment_blocks = Vec::new();
+        let mut segment_effects = <[SegmentEffects; 6]>::default();
+
+        // Test each side of the tile-to-be-placed.
         for side in 0..6 {
-            let my_terrain = map.rendered_next_tile[(side + rotation) % 6];
+            // The segment at side.
+            // let my_terrain = map.rendered_next_tile[(side + rotation) % 6];
+            let my_segment = map
+                .next_tile
+                .iter()
+                .enumerate()
+                .find(|(_, seg)| seg.contains_rotation((side + 6 - rotation) % 6));
+
+            // The map at side.
             let neighbor_pos = Map::neighbor_pos_of(pos, side);
             let other_side = (side + 3) % 6;
-            let other_terrain = map
+            let other_tile = map
                 .tile_key(neighbor_pos)
-                .and_then(|key| map.rendered_tiles[key])
-                .map_or(Terrain::Missing, |neighbor| neighbor[other_side]);
+                .and_then(|key| map.rendered_tiles[key].map(|segments| segments[other_side]));
 
-            let is_free = other_terrain == Terrain::Missing;
-            match my_terrain.connects_and_matches(other_terrain) {
-                None => {
-                    return None;
+            match (my_segment, other_tile) {
+                // Place empty next to empty or missing.
+                (None, None | Some(None)) => {}
+                // Place empty next to some tile with a segment.
+                (None, Some(Some(segment_index))) => {
+                    let group = groups.assigned_groups[segment_index];
+                    empty_segment_blocks.push(group);
                 }
-                Some(true) => {
-                    if !is_free {
-                        matching_edges += 1;
+                // Place something next to nothing.
+                (Some((i, _)), None) => {
+                    segment_effects[i].opens_edges += 1;
+                }
+                // Place something next to empty tile (check if matches).
+                // It doesn't open new or close any old edges.
+                (Some((_, my_segment)), Some(None)) => {
+                    match my_segment.terrain.connects_and_matches(Terrain::Empty) {
+                        None => {
+                            return None;
+                        }
+                        Some(true) => {
+                            matching_edges += 1;
+                        }
+                        Some(false) => {
+                            mismatched_edges += 1;
+                        }
                     }
                 }
-                Some(false) => {
-                    mismatched_edges += 1;
+                // Place something next to something (check if matches).
+                // May close old edges.
+                (Some((i, my_segment)), Some(Some(other_index))) => {
+                    let my_terrain = my_segment.terrain;
+                    let other_terrain = map.segments[other_index].terrain;
+                    match my_terrain.connects_and_matches(other_terrain) {
+                        None => {
+                            return None;
+                        }
+                        Some(true) => {
+                            let other_group = groups.assigned_groups[other_index];
+                            segment_effects[i].connects_to.push(other_group);
+                            matching_edges += 1;
+                        }
+                        Some(false) => {
+                            let other_group = groups.assigned_groups[other_index];
+                            segment_effects[i].blocks.push(other_group);
+                            mismatched_edges += 1;
+                        }
+                    }
                 }
             }
 
             // Prevent splitting/holes.
+            let is_free = other_tile.is_none();
             if split_groups.is_empty() {
                 split_groups.push(is_free);
             } else if *split_groups.last().unwrap() == is_free {
@@ -102,6 +156,14 @@ impl BestPlacements {
         }
 
         let split = split_groups.len() > 3;
+
+
+pub struct GroupEdgeAlteration {
+    pub size: usize,
+    pub diff: i8,
+}
+
+
 
         // What was the probability of finding any tile in the vicinity of `tile.pos` before
         // actually placing `tile`?

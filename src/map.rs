@@ -18,9 +18,11 @@ pub struct Map {
     pub index_offset: Pos,
     /// Defines the extents of the index structure.
     pub index_size: IVec2,
+    pub world_y_extents: IVec2,
+
     /// Maps a tile position key to a set of segment indices.
     pub tile_index: Vec<Option<(SegmentIndex, SegmentCount)>>,
-    pub rendered_tiles: Vec<Option<[Terrain; 6]>>,
+    pub rendered_tiles: Vec<Option<[Option<SegmentIndex>; 6]>>,
     /// Maps a segment id (index in this array) to a segment.
     pub segments: Vec<Segment>,
 
@@ -34,6 +36,7 @@ impl Default for Map {
         Self {
             index_offset: Pos::default(),
             index_size: IVec2::default(),
+            world_y_extents: IVec2::default(),
             tile_index: Vec::default(),
             rendered_tiles: Vec::default(),
             segments: Vec::default(),
@@ -113,6 +116,7 @@ impl From<&raw_data::SaveGame> for Map {
         // Accumulate min and max borders of map.
         let mut index_min = IVec2::ZERO;
         let mut index_max = IVec2::ZERO;
+        let mut world_y_extents = IVec2::new(i32::MAX, i32::MIN);
 
         // Pos                          -- tile_key_function()  --> IndexKey
         // IndexKey                     -- tile_index[]         --> Option<(SegmentIndex, SegmentCount)>
@@ -137,6 +141,9 @@ impl From<&raw_data::SaveGame> for Map {
             index_min.y = index_min.y.min(pos.y);
             index_max.x = index_max.x.max(pos.x);
             index_max.y = index_max.y.max(pos.y);
+            let world_y = pos.y + (pos.x + 1) / 2;
+            world_y_extents.x = world_y_extents.x.min(world_y);
+            world_y_extents.y = world_y_extents.y.max(world_y);
 
             let segment_count = tile_segments.len();
             segments.extend(tile_segments.into_iter());
@@ -158,10 +165,11 @@ impl From<&raw_data::SaveGame> for Map {
             let position_key = Map::tile_key_function(index_offset, index_size, pos).unwrap();
             tile_index[position_key] = Some((segment_base_index, segment_count));
 
-            let mut rendered = [Terrain::Empty; 6];
-            for segment in &segments[segment_base_index..segment_base_index + segment_count] {
+            let mut rendered = [None; 6];
+            for segment_index in segment_base_index..segment_base_index + segment_count {
+                let segment = &segments[segment_index];
                 for rotation in segment.rotations() {
-                    rendered[rotation] = segment.terrain;
+                    rendered[rotation] = Some(segment_index);
                 }
             }
             rendered_tiles[position_key] = Some(rendered);
@@ -176,6 +184,7 @@ impl From<&raw_data::SaveGame> for Map {
         }
 
         Self {
+            world_y_extents,
             index_offset,
             index_size,
             tile_index,
@@ -203,6 +212,13 @@ impl From<&raw_data::SaveGame> for Map {
         // // dbg!(&probabilities_as_vec);
     }
 }
+
+// enum MapQueryResult<T> {
+//     OutsideIndex,
+//     NoTile,
+//     NoSegment,
+//     Some(T),
+// }
 
 impl Map {
     /// Compute the position of tile at `pos` in the index structure.
@@ -233,9 +249,16 @@ impl Map {
         self.tile_index[self.tile_key(pos)?].map(|(index, count)| (index..index + count))
     }
 
-    pub fn segment_index_at(&self, pos: Pos, rotation: Rotation) -> Option<SegmentIndex> {
-        self.segment_indices_at(pos)?
-            .find(|index| self.segment(*index).rotations().contains(&rotation))
+    /// Important: returns None if either there is no tile there
+    /// or if the tile that is present has no segment at this rotation.
+    /// If that is a concern, check with `has` beforehand.
+    pub fn segment_at(&self, pos: Pos, rotation: Rotation) -> Option<(SegmentIndex, &Segment)> {
+        self.segment_indices_at(pos)?.find_map(|index| {
+            let segment = self.segment(index);
+            segment
+                .contains_rotation(rotation)
+                .then_some((index, segment))
+        })
     }
 
     pub fn segment(&self, segment_index: SegmentIndex) -> &Segment {
