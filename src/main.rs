@@ -18,7 +18,6 @@ mod data;
 mod gpu;
 mod group;
 mod group_assignments;
-mod index;
 mod lerp;
 mod map;
 mod pipeline;

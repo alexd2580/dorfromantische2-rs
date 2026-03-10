@@ -88,32 +88,11 @@ impl Map {
 
         (pos, segments)
     }
-}
 
-impl From<&raw_data::SaveGame> for Map {
-    fn from(savegame: &raw_data::SaveGame) -> Self {
-        // TODO ENABLE THIS
-        // let mut quest_tile_ids = HashSet::<i32>::default();
-        // let mut quest_ids = HashSet::<i32>::default();
-
-        // TODO convert sectionGridPos into gridPos and then into axial coordinates.
-        // dbg!(&savegame.preplaced_tiles);
-        // int num = Mathf.RoundToInt(worldPos.x / (_tileSize.x * 0.75f));
-        // int y = Mathf.RoundToInt((worldPos.z + (float)Mathf.Abs(num % 2) * _tileSize.y / 2f) / _tileSize.y);
-        // return new Vector2Int(num, y);
-
-        // TODO ENABLE THIS
-        // savegame
-        //     .tiles
-        //     .iter()
-        //     .filter(|tile| tile.quest_tile.is_some())
-        //     .for_each(|tile| {
-        //         let q = tile.quest_tile.as_ref().unwrap();
-        //         quest_ids.insert(q.quest_id.0);
-        //         quest_tile_ids.insert(q.quest_tile_id.0);
-        //     });
-
-        // Accumulate min and max borders of map.
+    /// Load all tiles from the savegame, accumulating positions, segments, and map bounds.
+    fn load_all_tiles(
+        savegame: &raw_data::SaveGame,
+    ) -> (Vec<(Pos, usize, usize)>, Vec<Segment>, IVec2, IVec2, IVec2) {
         let mut index_min = IVec2::ZERO;
         let mut index_max = IVec2::ZERO;
         let mut world_y_extents = IVec2::new(i32::MAX, i32::MIN);
@@ -122,21 +101,15 @@ impl From<&raw_data::SaveGame> for Map {
         // IndexKey                     -- tile_index[]         --> Option<(SegmentIndex, SegmentCount)>
         // (SegmentIndex, SegmentCount) -- segments[]           --> &[Segment]
 
-        // Cache the positions of tiles. Can't compute the index keys yet.
-        // I'm using a primitive non-expanding scanrow indexing.
         let mut pos_map = Vec::<(Pos, usize, usize)>::default();
         pos_map.push((IVec2::new(0, 0), 0, 0));
 
-        // Create segments vector (estimate the number of segments at three per tile).
-        let mut segments = Vec::new();
-        segments.reserve(savegame.tiles.len() * 3);
+        let mut segments = Vec::with_capacity(savegame.tiles.len() * 3);
 
-        // Prepend tiles list with empty tile (is this necessary when I start parsing special tiles?)
         for raw_tile in &savegame.tiles {
-            // The base index is the index of the first segment in the large `segments` vec.
             let segment_base_index = segments.len();
-
             let (pos, tile_segments) = Map::load_tile(raw_tile);
+
             index_min.x = index_min.x.min(pos.x);
             index_min.y = index_min.y.min(pos.y);
             index_max.x = index_max.x.max(pos.x);
@@ -146,22 +119,28 @@ impl From<&raw_data::SaveGame> for Map {
             world_y_extents.y = world_y_extents.y.max(world_y);
 
             let segment_count = tile_segments.len();
-            segments.extend(tile_segments.into_iter());
+            segments.extend(tile_segments);
             pos_map.push((pos, segment_base_index, segment_count));
         }
 
-        // Compute the cache size/offset.
-        let lower = index_min - IVec2::ONE;
-        let upper = index_max + IVec2::ONE;
+        (pos_map, segments, index_min, index_max, world_y_extents)
+    }
 
-        let index_offset = lower;
-        let index_size = upper - lower + IVec2::ONE;
+    /// Build the spatial index and per-rotation rendered tile lookups.
+    fn build_index(
+        pos_map: &[(Pos, usize, usize)],
+        segments: &[Segment],
+        index_offset: IVec2,
+        index_size: IVec2,
+    ) -> (
+        Vec<Option<(SegmentIndex, SegmentCount)>>,
+        Vec<Option<[Option<SegmentIndex>; 6]>>,
+    ) {
         let index_length = usize::try_from(index_size.x * index_size.y).unwrap();
         let mut tile_index = vec![None; index_length];
         let mut rendered_tiles = vec![None; index_length];
 
-        // Insert the cached segment ids per position into the cache.
-        for (pos, segment_base_index, segment_count) in pos_map {
+        for &(pos, segment_base_index, segment_count) in pos_map {
             let position_key = Map::tile_key_function(index_offset, index_size, pos).unwrap();
             tile_index[position_key] = Some((segment_base_index, segment_count));
 
@@ -175,13 +154,34 @@ impl From<&raw_data::SaveGame> for Map {
             rendered_tiles[position_key] = Some(rendered);
         }
 
-        let (_, next_tile) = Map::load_tile(&savegame.tile_stack[0]);
-        let mut rendered_next_tile = [Terrain::Empty; 6];
-        for segment in &next_tile {
+        (tile_index, rendered_tiles)
+    }
+
+    /// Render the next tile from the tile stack into a per-rotation terrain array.
+    fn render_next_tile(next_tile: &[Segment]) -> [Terrain; 6] {
+        let mut rendered = [Terrain::Empty; 6];
+        for segment in next_tile {
             for rotation in segment.rotations() {
-                rendered_next_tile[rotation] = segment.terrain;
+                rendered[rotation] = segment.terrain;
             }
         }
+        rendered
+    }
+}
+
+impl From<&raw_data::SaveGame> for Map {
+    fn from(savegame: &raw_data::SaveGame) -> Self {
+        let (pos_map, segments, index_min, index_max, world_y_extents) =
+            Map::load_all_tiles(savegame);
+
+        let index_offset = index_min - IVec2::ONE;
+        let index_size = index_max + IVec2::ONE - index_offset + IVec2::ONE;
+
+        let (tile_index, rendered_tiles) =
+            Map::build_index(&pos_map, &segments, index_offset, index_size);
+
+        let (_, next_tile) = Map::load_tile(&savegame.tile_stack[0]);
+        let rendered_next_tile = Map::render_next_tile(&next_tile);
 
         Self {
             world_y_extents,
@@ -193,32 +193,8 @@ impl From<&raw_data::SaveGame> for Map {
             next_tile,
             rendered_next_tile,
         }
-
-        // ASLKDJASLDKJ
-        // let mut probabilities = HashMap::default();
-        // let num_tiles = tiles.len() as f32;
-        // for tile in &tiles {
-        //     let canonical_id = tile.canonical_id();
-        //     if !probabilities.contains_key(&canonical_id) {
-        //         probabilities.insert(canonical_id, (tile.parts.clone(), 0, 0.0));
-        //     }
-        //     let entry = probabilities.get_mut(&canonical_id).unwrap();
-        //     entry.1 += 1;
-        //     entry.2 = entry.1 as f32 / num_tiles;
-        // }
-
-        // // let mut probabilities_as_vec = probabilities.values().collect::<Vec<_>>();
-        // // probabilities_as_vec.sort_by_key(|entry| usize::MAX - entry.1);
-        // // dbg!(&probabilities_as_vec);
     }
 }
-
-// enum MapQueryResult<T> {
-//     OutsideIndex,
-//     NoTile,
-//     NoSegment,
-//     Some(T),
-// }
 
 impl Map {
     /// Compute the position of tile at `pos` in the index structure.
@@ -265,12 +241,6 @@ impl Map {
         &self.segments[segment_index]
     }
 
-    // fn segments_at(&self, pos: Pos) -> Option<(Range<SegmentIndex>, &[Segment])> {
-    //     self.tile_key(pos)
-    //         .and_then(|key| self.tile_index[key])
-    //         .map(|(index, count)| ((index..index + count), &self.segments[index..index + count]))
-    // }
-
     pub fn neighbor_pos_of(pos: Pos, rotation: Rotation) -> Pos {
         pos + match rotation {
             0 => Pos::new(0, 1),
@@ -283,80 +253,3 @@ impl Map {
         }
     }
 }
-
-/*
-pub struct Map {
-    /// Probability/count of getting a tile. Tiles are canonicalized by converting the terrain enum
-    /// into int and choosing the lexicographically smallest rotation.
-    // probabilities: HashMap<u32, ([Terrain; 6], usize, f32)>,
-    //
-    // /// Groups of segments on tiles.
-    // assigned_groups: HashMap<(TileId, SegmentId), GroupId>,
-}
-
-        let mut probabilities = HashMap::default();
-        let num_tiles = tiles.len() as f32;
-        for tile in &tiles {
-            let canonical_id = tile.canonical_id();
-            if !probabilities.contains_key(&canonical_id) {
-                probabilities.insert(canonical_id, (tile.parts.clone(), 0, 0.0));
-            }
-            let entry = probabilities.get_mut(&canonical_id).unwrap();
-            entry.1 += 1;
-            entry.2 = entry.1 as f32 / num_tiles;
-        }
-
-        // let mut probabilities_as_vec = probabilities.values().collect::<Vec<_>>();
-        // probabilities_as_vec.sort_by_key(|entry| usize::MAX - entry.1);
-        // dbg!(&probabilities_as_vec);
-
-//
-// impl Map {
-//     pub fn segment(&self, tile_id: TileId, segment_id: SegmentId) -> Option<&Segment> {
-//         self.tile(tile_id).and_then(|tile| tile.segment(segment_id))
-//     }
-//
-//     pub fn group_of(&self, tile_id: TileId, segment_id: SegmentId) -> GroupId {
-//         self.assigned_groups[&(tile_id, segment_id)]
-//     }
-//
-//     pub fn group(&self, group_id: GroupId) -> &Group {
-//         &self.groups[group_id]
-//     }
-//
-//     pub fn best_placements(&self) -> &BTreeMap<i32, BTreeMap<isize, (IVec2, Rotation)>> {
-//         &self.best_placements
-//     }
-//
-//     fn iter_neighbor_cells<'a>(
-//         &'a self,
-//         tile: &'a Tile,
-//     ) -> impl Iterator<Item = (IVec2, Option<TileId>)> + 'a {
-//         (0..6).map(|rotation| {
-//             let neighbor_pos = tile.neighbor_pos(rotation);
-//             (neighbor_pos, self.tile_id_at(neighbor_pos))
-//         })
-//     }
-//
-//     pub fn evaluate_best_placements(&mut self) {
-//     }
-//
-//     /// Chance returned as number of previously used tiles that would have matched.
-//     pub fn chance_of_finding_tile_for(&self, outer_edges: &[Terrain; 6]) -> usize {
-//         let mut total_matching_count = 0;
-//         for (inner_edges, tile_count, _) in self.probabilities.values() {
-//             let matches = Tile::is_perfect_placement(inner_edges, outer_edges);
-//             if matches {
-//                 total_matching_count += tile_count;
-//             }
-//         }
-//         total_matching_count
-//     }
-//     /// Collect the edge requirements for a tile at `pos`.
-//     pub fn outer_edges(&self, pos: IVec2) -> [Terrain; 6] {
-//         [0, 1, 2, 3, 4, 5].map(|side| self.terrain_of_neighbor_at(pos, side))
-//     }
-//
-// }
-
-*/
