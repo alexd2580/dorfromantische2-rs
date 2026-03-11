@@ -149,11 +149,11 @@ impl TryFrom<&Value> for Segment {
 pub struct QuestTile {
     pub quest_tile_id: QuestTileId,
     pub quest_active: bool,
-    quest_queue_index: i32,
-    target_value: i32,
-    quest_level: i32,
+    pub quest_queue_index: i32,
+    pub target_value: i32,
+    pub quest_level: i32,
     pub quest_id: QuestId,
-    unlocked_challenge_id: ChallengeId,
+    pub unlocked_challenge_id: ChallengeId,
     version: i32,
 }
 
@@ -318,6 +318,36 @@ impl TryFrom<&Value> for SaveGame {
             // onUpdated
             version: try_key_as(values, "version")?,
         })
+    }
+}
+
+/// Dump the raw NRBF structure of the first tile for debugging.
+pub fn dump_first_tile(value: &Value) -> String {
+    if let Value::Object(_, values) = value {
+        if let Ok(tiles) = try_key_of(values, "tiles") {
+            let items = try_prefix_object_from("System.Collections.Generic.List`1[", tiles)
+                .and_then(|v| try_key_of(v, "_items"));
+            if let Ok(Value::Array(_, _, items)) = items {
+                if let Some(tile) = items.first() {
+                    return format!("{tile:#?}");
+                }
+            }
+        }
+    }
+    "Could not find tiles".to_string()
+}
+
+/// Dump the raw NRBF value of `activeChallenges` for debugging.
+pub fn dump_active_challenges(value: &Value) -> String {
+    if let Value::Object(_, values) = value {
+        if let Ok(val) = try_key_of(values, "activeChallenges") {
+            format!("{val:#?}")
+        } else {
+            format!("No activeChallenges field. Keys: {:?}",
+                values.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>())
+        }
+    } else {
+        "Not an object".to_string()
     }
 }
 

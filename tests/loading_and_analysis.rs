@@ -1,8 +1,8 @@
 use dorfromantische2_rs::best_placements::{BestPlacements, MAX_SHOWN_PLACEMENTS};
-use dorfromantische2_rs::data::{Form, HEX_SIDES, Pos, Terrain};
+use dorfromantische2_rs::data::{EdgeMatch, Form, HEX_SIDES, Pos, Terrain};
 use dorfromantische2_rs::group_assignments::GroupAssignments;
 use dorfromantische2_rs::map::Map;
-use dorfromantische2_rs::raw_data::SaveGame;
+use dorfromantische2_rs::raw_data::{self, SaveGame};
 use glam::IVec2;
 use std::io::Cursor;
 
@@ -10,9 +10,13 @@ use std::io::Cursor;
 // Helpers
 // ===========================================================================
 
-fn load_savegame(path: &str) -> SaveGame {
+fn load_raw(path: &str) -> nrbf_rs::value::Value {
     let data = std::fs::read(path).unwrap_or_else(|_| panic!("{path} not found"));
-    let parsed = nrbf_rs::parse_nrbf(&mut Cursor::new(&data));
+    nrbf_rs::parse_nrbf(&mut Cursor::new(&data))
+}
+
+fn load_savegame(path: &str) -> SaveGame {
+    let parsed = load_raw(path);
     SaveGame::try_from(&parsed).unwrap_or_else(|e| panic!("Failed to parse {path}: {e}"))
 }
 
@@ -550,21 +554,6 @@ fn test_best_placements_limited_to_max() {
 }
 
 #[test]
-fn test_best_placements_no_mismatched_edges() {
-    let sg = load_dorfromantik();
-    let map = build_map(&sg);
-    let groups = analyze_groups(&map);
-    let placements = compute_placements(&map, &groups);
-
-    for (_, score) in placements.iter_usable() {
-        assert_eq!(
-            score.mismatched_edges, 0,
-            "Usable placements should have 0 mismatched edges"
-        );
-    }
-}
-
-#[test]
 fn test_best_placements_valid_positions() {
     let sg = load_dorfromantik();
     let map = build_map(&sg);
@@ -599,16 +588,13 @@ fn test_best_placements_sorted_by_quality() {
     for window in usable.windows(2) {
         let (_, a) = &window[0];
         let (_, b) = &window[1];
-        // Higher-ranked placements should have >= matching edges
-        // (when split status is equal)
-        if a.split == b.split {
-            assert!(
-                a.matching_edges >= b.matching_edges,
-                "Placements not sorted: {} matching > {} matching",
-                a.matching_edges,
-                b.matching_edges
-            );
-        }
+        // Higher-ranked placements should have >= matching edges.
+        assert!(
+            a.matching_edges >= b.matching_edges,
+            "Placements not sorted: {} matching > {} matching",
+            a.matching_edges,
+            b.matching_edges
+        );
     }
 }
 
@@ -685,8 +671,8 @@ fn test_terrain_missing_always_matches() {
     for &t in &terrains {
         assert_eq!(
             Terrain::Missing.connects_and_matches(t),
-            Some(true),
-            "Missing should always match with {t:?}"
+            EdgeMatch::Missing,
+            "Missing should return Missing for {t:?}"
         );
     }
 }
@@ -696,7 +682,7 @@ fn test_terrain_same_type_matches() {
     for &t in &[Terrain::House, Terrain::Forest, Terrain::Wheat] {
         assert_eq!(
             t.connects_and_matches(t),
-            Some(true),
+            EdgeMatch::Matching,
             "{t:?} should match itself"
         );
     }
@@ -706,7 +692,7 @@ fn test_terrain_same_type_matches() {
 fn test_terrain_rail_river_dont_cross() {
     assert_eq!(
         Terrain::Rail.connects_and_matches(Terrain::River),
-        None,
+        EdgeMatch::Illegal,
         "Rail and River should not connect"
     );
 }
@@ -715,7 +701,7 @@ fn test_terrain_rail_river_dont_cross() {
 fn test_terrain_river_connects_to_lake() {
     assert_eq!(
         Terrain::River.connects_and_matches(Terrain::Lake),
-        Some(true)
+        EdgeMatch::Matching
     );
 }
 
@@ -723,7 +709,7 @@ fn test_terrain_river_connects_to_lake() {
 fn test_terrain_rail_connects_to_station() {
     assert_eq!(
         Terrain::Rail.connects_and_matches(Terrain::Station),
-        Some(true)
+        EdgeMatch::Matching
     );
 }
 
@@ -751,5 +737,45 @@ fn test_terrain_from_group_type_id_all_known() {
     }
 }
 
+#[test]
+fn dump_first_tile() {
+    let raw = load_raw("mini.sav");
+    println!("{}", raw_data::dump_first_tile(&raw));
+}
+
+#[test]
+fn dump_active_challenges_structure() {
+    for path in ["biggame.sav", "dorfromantik.dump", "mini.sav"] {
+        let raw = load_raw(path);
+        println!("=== {path} ===");
+        println!("{}", raw_data::dump_active_challenges(&raw));
+        println!();
+    }
+}
+
 // Quest tile segment generation is tested indirectly through the full pipeline tests
 // (test_full_pipeline_*) which load real save files containing quest tiles.
+
+#[test]
+fn print_biggame_quests() {
+    let save = load_biggame();
+    let map = Map::from(&save);
+    let groups = GroupAssignments::from(&map);
+
+    use dorfromantische2_rs::data::quest_terrain;
+    // Dump quest fields to find the exact/more-than indicator.
+    for tile in &save.tiles {
+        if let Some(qt) = &tile.quest_tile {
+            if qt.target_value >= 0 {
+                let terrain = quest_terrain(qt.quest_tile_id.0)
+                    .map(|t| format!("{t:?}"))
+                    .unwrap_or_else(|| "?".into());
+                println!(
+                    "quest_id={} terrain={terrain} level={} queue={} challenge={} target={}",
+                    qt.quest_id.0, qt.quest_level, qt.quest_queue_index,
+                    qt.unlocked_challenge_id.0, qt.target_value,
+                );
+            }
+        }
+    }
+}

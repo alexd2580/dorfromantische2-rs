@@ -79,6 +79,7 @@ impl MapLoader {
                 // Load savegame.
                 let path = path;
 
+                log::info!("Loading savegame: {}", path.display());
                 let start = std::time::Instant::now();
 
                 // Fugly retry mechanism.
@@ -150,8 +151,8 @@ pub struct App {
     // Game data.
     pub map_loader: MapLoader,
     /// Map of tiles.
-    map: Map,
-    group_assignments: GroupAssignments,
+    pub map: Map,
+    pub group_assignments: GroupAssignments,
     pub best_placements: BestPlacements,
     pub show_placements: [bool; MAX_SHOWN_PLACEMENTS],
 
@@ -167,13 +168,13 @@ pub struct App {
 
     // Window data.
     /// Size of the window.
-    size: UVec2,
+    pub size: UVec2,
     /// Aspect ration of the window.
     aspect_ratio: f32,
 
     // Mouse state.
     /// Mouse position in window coordinates.
-    mouse_position: Vec2,
+    pub mouse_position: Vec2,
     /// Whether the left mouse button is held.
     pub grab_move: bool,
     /// Whether the right mouse button is held.
@@ -323,7 +324,7 @@ impl App {
             goto_x: String::new(),
             goto_y: String::new(),
             section_style: 0,
-            closed_group_style: 1,
+            closed_group_style: 2,
             highlight_hovered_group: false,
 
             map: Map::default(),
@@ -371,10 +372,20 @@ impl App {
 
     /// Compute world coordinates of pixel.
     fn pixel_to_world(&self, pos: Vec2) -> Vec2 {
-        // First, get world-coordinates of pixel.
         let relative = pos / self.size.as_vec2();
         let uv_2 = Vec2::new(1.0, -1.0) * (relative - 0.5);
         *self.origin + uv_2 * Vec2::new(self.aspect_ratio, 1.0) * *self.inv_scale
+    }
+
+    /// Compute pixel coordinates of world position.
+    pub fn world_to_pixel(&self, world: Vec2) -> Vec2 {
+        let uv_2 = (world - *self.origin) / (*self.inv_scale * Vec2::new(self.aspect_ratio, 1.0));
+        (uv_2 * Vec2::new(1.0, -1.0) + 0.5) * self.size.as_vec2()
+    }
+
+    /// Compute pixel coordinates of hex position.
+    pub fn hex_to_pixel(&self, pos: IVec2) -> Vec2 {
+        self.world_to_pixel(Self::hex_to_world(pos))
     }
 
     pub fn on_cursor_move(&mut self, pos: Vec2) {
@@ -515,10 +526,7 @@ impl App {
             self.map = map;
             self.group_assignments = groups;
             self.best_placements = best_placements;
-            self.show_placements = [false; MAX_SHOWN_PLACEMENTS];
-            (0..INITIAL_SHOWN_PLACEMENTS).for_each(|i| {
-                self.show_placements[i] = true;
-            });
+            self.show_placements = [true; MAX_SHOWN_PLACEMENTS];
             self.zoom_fit();
 
             let map_byte_size = shader::byte_size(&self.map);

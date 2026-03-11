@@ -66,8 +66,11 @@ impl<'a> GroupAnalyzer<'a> {
         // Collect all members belonging to the same group as `segment`.
         let mut segment_indices = HashSet::new();
         let mut open_edges = HashSet::new();
+        let mut quests = Vec::new();
+        // Track which tile positions we've already checked for quests.
+        let mut checked_quest_positions = HashSet::new();
 
-        // Start the
+        // Start the flood fill from the initial segment.
         self.segment_queue.push(segment_index);
         self.discovered_segments
             .insert((segment_index, group_terrain));
@@ -76,6 +79,16 @@ impl<'a> GroupAnalyzer<'a> {
             segment_indices.insert(segment_index);
 
             let segment = self.map.segment(segment_index);
+
+            // Check if this tile has a quest matching the group terrain.
+            if checked_quest_positions.insert(segment.pos) {
+                if let Some(quest) = self.map.quests.get(&segment.pos) {
+                    if quest.terrain.extends_group_of(group_terrain) {
+                        quests.push(quest.clone());
+                    }
+                }
+            }
+
             for rotation in 0..HEX_SIDES {
                 let neighbor_pos = Map::neighbor_pos_of(segment.pos, rotation);
                 let neighbor_exists = self.handle_new_pos(neighbor_pos);
@@ -111,9 +124,14 @@ impl<'a> GroupAnalyzer<'a> {
                     });
             }
         }
+        let unit_count = Group::compute_unit_count(&segment_indices, &self.map.segments);
+        let centroid = Group::compute_centroid(&segment_indices, &self.map.segments);
         self.groups.push(Group {
             segment_indices,
             open_edges,
+            quests,
+            unit_count,
+            centroid,
         });
     }
 
@@ -179,7 +197,6 @@ impl From<&Map> for GroupAssignments {
             assigned_groups: Vec::default(),
         };
         analyzer.run();
-        dbg!(analyzer.groups.len());
         Self {
             possible_placements: analyzer.possible_placements,
             groups: analyzer.groups,

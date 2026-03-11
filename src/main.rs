@@ -70,6 +70,7 @@ fn run(
     mut app: App,
 ) {
     let mut show_tooltip = false;
+    let mut show_groups = true;
     let mut sidebar_expanded = true;
     event_loop.run(move |event, _, control_flow| {
         // What the actual??
@@ -149,7 +150,7 @@ fn run(
             Event::RedrawRequested(_) => {
                 let (paint_jobs, textures_delta) = ui.run(&window, |ctx| {
                     // TODO move these bools somewhere.... TODO what bools?
-                    render_ui(&mut app, ctx, &mut sidebar_expanded, &mut show_tooltip);
+                    render_ui(&mut app, ctx, &mut sidebar_expanded, &mut show_tooltip, &mut show_groups);
                 });
 
                 app.tick(&gpu);
@@ -162,7 +163,11 @@ fn run(
 }
 
 fn main() {
-    env_logger::init();
+    env_logger::Builder::from_env(
+        env_logger::Env::default()
+            .default_filter_or("info,wgpu_core=error,wgpu_hal=error,egui_wgpu=error,naga=error"),
+    )
+    .init();
 
     let event_loop = EventLoop::new();
     let window = winit::window::Window::new(&event_loop).unwrap();

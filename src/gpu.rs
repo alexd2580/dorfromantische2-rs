@@ -177,16 +177,26 @@ impl Gpu {
         }
     }
 
-    pub fn get_current_texture(&self) -> (wgpu::SurfaceTexture, wgpu::TextureView) {
-        let frame = self
-            .surface
-            .get_current_texture()
-            .expect("Failed to acquire next swapchain texture");
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        (frame, view)
+    pub fn get_current_texture(&self) -> Option<(wgpu::SurfaceTexture, wgpu::TextureView)> {
+        match self.surface.get_current_texture() {
+            Ok(frame) => {
+                let view = frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                Some((frame, view))
+            }
+            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+                self.surface.configure(&self.device, &self.surface_config);
+                None
+            }
+            Err(wgpu::SurfaceError::Timeout) => {
+                log::warn!("Surface timeout");
+                None
+            }
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                panic!("GPU out of memory");
+            }
+        }
     }
 
     pub fn create_encoder(&self) -> wgpu::CommandEncoder {

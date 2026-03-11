@@ -96,7 +96,10 @@ impl Pipeline {
         textures_delta: egui::TexturesDelta,
     ) {
         // Prepare frame resources.
-        let (frame, view) = gpu.get_current_texture();
+        let (frame, view) = match gpu.get_current_texture() {
+            Some(result) => result,
+            None => return, // Skip frame if surface is outdated/lost
+        };
         let mut encoder = gpu.create_encoder();
 
         // Upload egui data.

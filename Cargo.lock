@@ -664,6 +664,7 @@ dependencies = [
  "env_logger",
  "glam",
  "image",
+ "log",
  "naga",
  "nrbf-rs",
  "opencv",
