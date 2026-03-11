@@ -1655,6 +1655,7 @@ checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
 [[package]]
 name = "nrbf-rs"
 version = "0.1.0"
+source = "git+https://github.com/alexd2580/nrbf-rs.git?branch=master#51ee8a98ace168c004beebbb18377f8e538e91d5"
 dependencies = [
  "num-derive",
  "num-traits",

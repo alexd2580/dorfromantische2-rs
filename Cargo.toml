@@ -30,7 +30,7 @@ wgpu = { version = "0.17.1", features = [ "glsl", "naga" ] }
 naga = "0.13.0"
 
 # Buffer management.
-nrbf-rs = { path = "../nrbf-rs", version = "0.1.0" }
+nrbf-rs = { git = "https://github.com/alexd2580/nrbf-rs.git", branch = "master" }
 bytemuck = "1.14.0"
 image = "0.24.7"
 rfd = "0.12.1"
