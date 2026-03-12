@@ -58,14 +58,14 @@ impl Form {
             (Form::Straight, Terrain::Forest) => 17,
             (Form::Size3, Terrain::Forest) => 17,
             // TODO
-            (Form::JunctionLeft, Terrain::Forest) => 4,
+            (Form::JunctionLeft, Terrain::Forest) => 20,
             (Form::JunctionRight, Terrain::Forest) => 4,
-            (Form::ThreeWay, Terrain::Forest) => 4,
-            (Form::Size4, Terrain::Forest) => 5,
-            (Form::FanOut, Terrain::Forest) => 5,
-            (Form::X, Terrain::Forest) => 5,
-            (Form::Size5, Terrain::Forest) => 5,
-            (Form::Size6, Terrain::Forest) => 7,
+            (Form::ThreeWay, Terrain::Forest) => 20,
+            (Form::Size4, Terrain::Forest) => 21,
+            (Form::FanOut, Terrain::Forest) => 24,
+            (Form::X, Terrain::Forest) => 24,
+            (Form::Size5, Terrain::Forest) => 29,
+            (Form::Size6, Terrain::Forest) => 37,
 
             // Wheat
             (Form::Size1, Terrain::Wheat) => 1,
@@ -305,7 +305,7 @@ fn wheat_tile_segments(id: i32) -> Option<Vec<SegmentDef>> {
         // 2AA_4AF (Normal, BigTree, Granary, Windmill)
         2 | 3 | 4 | 5 => vec![
             (Form::Size2, Terrain::Wheat, 5, 1),
-            (Form::Size4, Terrain::Forest, 1, 4),
+            (Form::Size4, Terrain::Forest, 1, 21),
         ],
         // 2AA
         92 => vec![(Form::Size2, Terrain::Wheat, 0, 1)],
@@ -323,7 +323,7 @@ fn wheat_tile_segments(id: i32) -> Option<Vec<SegmentDef>> {
         // 4AA_2AF (Normal, Granary)
         9 | 10 => vec![
             (Form::Size4, Terrain::Wheat, 0, 2),
-            (Form::Size2, Terrain::Forest, 4, 2),
+            (Form::Size2, Terrain::Forest, 4, 7),
         ],
         // 4BA_1AF_1AF (Normal, BigTree)
         11 | 12 => vec![
@@ -345,11 +345,13 @@ fn forest_tile_segments(id: i32) -> Option<Vec<SegmentDef>> {
         // 2AF (Normal, Deer, Bear, Boar)
         67 | 68 | 69 | 70 => vec![(Form::Size2, Terrain::Forest, 0, 2)],
         // 3AF (Normal, Deer, Bear, Boar)
-        20 | 21 | 71 | 72 => vec![(Form::Size3, Terrain::Forest, 0, 3)],
+        20 | 21 | 71 | 72 => vec![(Form::Size3, Terrain::Forest, 0, 17)],
         // 4AF (Normal, Ruin)
-        22 | 73 => vec![(Form::Size4, Terrain::Forest, 0, 4)],
-        // 6AF (Normal, Deer, Bear, Boar, Ruin)
-        23 | 24 | 74 | 75 | 76 => vec![(Form::Size6, Terrain::Forest, 0, 6)],
+        22 | 73 => vec![(Form::Size4, Terrain::Forest, 0, 21)],
+        // 6AF (Normal, Bear, Boar, Ruin)
+        23 | 74 | 75 | 76 => vec![(Form::Size6, Terrain::Forest, 0, 37)],
+        // 6AF (Deer)
+        24 => vec![(Form::Size6, Terrain::Forest, 0, 26)],
         // 1AF_2AW (Normal, Deer)
         17 | 18 => vec![
             (Form::Size1, Terrain::Forest, 3, 1),
@@ -369,7 +371,7 @@ fn village_tile_segments(id: i32) -> Option<Vec<SegmentDef>> {
         // 3AV_3AF (Normal, Fountain, Tower, Fox)
         34 | 36 | 37 | 80 => vec![
             (Form::Size3, Terrain::House, 0, 3),
-            (Form::Size3, Terrain::Forest, 3, 3),
+            (Form::Size3, Terrain::Forest, 3, 17),
         ],
         // 4BV_1AF_1AF (Normal, Fountain, Tower, Fox)
         39 | 40 | 41 | 84 => vec![
@@ -403,7 +405,7 @@ fn rail_tile_segments(id: i32) -> Option<Vec<SegmentDef>> {
         26 => vec![
             (Form::Bridge, Terrain::Rail, 0, 1),
             (Form::Size1, Terrain::Forest, 1, 1),
-            (Form::Size3, Terrain::Forest, 3, 3),
+            (Form::Size3, Terrain::Forest, 3, 17),
         ],
         // 2BT_3AV_1AV
         27 => vec![
@@ -430,7 +432,7 @@ fn water_tile_segments(id: i32) -> Option<Vec<SegmentDef>> {
         45 | 46 => vec![
             (Form::Bridge, Terrain::River, 0, 1),
             (Form::Size1, Terrain::Forest, 1, 1),
-            (Form::Size3, Terrain::Forest, 3, 3),
+            (Form::Size3, Terrain::Forest, 3, 17),
         ],
         // 2CW (Normal, Boat, Beaver)
         47 | 54 | 58 => vec![(Form::Straight, Terrain::River, 0, 1)],
@@ -467,7 +469,7 @@ fn water_tile_segments(id: i32) -> Option<Vec<SegmentDef>> {
         // 3AW_3AF (Normal, SwanGoose, Beaver)
         59 | 89 | 60 => vec![
             (Form::Size3, Terrain::Lake, 0, 1),
-            (Form::Size3, Terrain::Forest, 3, 3),
+            (Form::Size3, Terrain::Forest, 3, 17),
         ],
         // 4AW_2AF (Normal, Beaver, SwanGoose)
         61 | 62 | 90 => vec![

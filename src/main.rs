@@ -70,7 +70,8 @@ fn run(
     mut app: App,
 ) {
     let mut show_tooltip = false;
-    let mut show_groups = true;
+    let mut show_groups = false;
+    let mut show_biggest_groups = false;
     let mut sidebar_expanded = true;
     event_loop.run(move |event, _, control_flow| {
         // What the actual??
@@ -150,7 +151,14 @@ fn run(
             Event::RedrawRequested(_) => {
                 let (paint_jobs, textures_delta) = ui.run(&window, |ctx| {
                     // TODO move these bools somewhere.... TODO what bools?
-                    render_ui(&mut app, ctx, &mut sidebar_expanded, &mut show_tooltip, &mut show_groups);
+                    render_ui(
+                        &mut app,
+                        ctx,
+                        &mut sidebar_expanded,
+                        &mut show_tooltip,
+                        &mut show_groups,
+                        &mut show_biggest_groups,
+                    );
                 });
 
                 app.tick(&gpu);

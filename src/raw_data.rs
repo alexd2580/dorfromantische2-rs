@@ -215,10 +215,10 @@ impl TryFrom<&Value> for Tile {
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct PreplacedTile {
-    section_grid_pos_x: i32,
-    section_grid_pos_y: i32,
-    preplaced_tile_id: QuestTileId,
-    version: i32,
+    pub section_grid_pos_x: i32,
+    pub section_grid_pos_y: i32,
+    pub preplaced_tile_id: QuestTileId,
+    pub version: i32,
 }
 
 impl TryFrom<&Value> for PreplacedTile {
@@ -343,8 +343,10 @@ pub fn dump_active_challenges(value: &Value) -> String {
         if let Ok(val) = try_key_of(values, "activeChallenges") {
             format!("{val:#?}")
         } else {
-            format!("No activeChallenges field. Keys: {:?}",
-                values.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>())
+            format!(
+                "No activeChallenges field. Keys: {:?}",
+                values.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>()
+            )
         }
     } else {
         "Not an object".to_string()

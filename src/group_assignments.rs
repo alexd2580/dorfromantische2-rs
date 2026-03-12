@@ -127,6 +127,7 @@ impl<'a> GroupAnalyzer<'a> {
         let unit_count = Group::compute_unit_count(&segment_indices, &self.map.segments);
         let centroid = Group::compute_centroid(&segment_indices, &self.map.segments);
         self.groups.push(Group {
+            terrain: group_terrain,
             segment_indices,
             open_edges,
             quests,

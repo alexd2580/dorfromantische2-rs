@@ -1,5 +1,5 @@
 use dorfromantische2_rs::best_placements::{BestPlacements, MAX_SHOWN_PLACEMENTS};
-use dorfromantische2_rs::data::{EdgeMatch, Form, HEX_SIDES, Pos, Terrain};
+use dorfromantische2_rs::data::{EdgeMatch, Form, Pos, Terrain, HEX_SIDES};
 use dorfromantische2_rs::group_assignments::GroupAssignments;
 use dorfromantische2_rs::map::Map;
 use dorfromantische2_rs::raw_data::{self, SaveGame};
@@ -126,6 +126,189 @@ fn test_biggame_has_tile_stack() {
 fn test_savegame_has_preplaced_tiles() {
     let sg = load_dorfromantik();
     assert!(!sg.preplaced_tiles.is_empty());
+}
+
+#[test]
+fn dump_preplaced_tiles() {
+    // Both savegames share the same preplaced_tile_seed, so preplaced_tiles should be identical.
+    let sg1 = load_dorfromantik();
+    let sg2 = load_biggame();
+
+    // The smaller save has fewer placed tiles. Find quest tiles that exist in sg2 but not sg1
+    // — those were placed between the two saves, giving us section->hex pairs.
+    use std::collections::HashSet;
+    let sg1_quest_positions: HashSet<(i32, i32)> = sg1
+        .tiles
+        .iter()
+        .filter(|t| t.quest_tile.is_some())
+        .map(|t| (t.s, t.t))
+        .collect();
+
+    let new_quest_tiles: Vec<_> = sg2
+        .tiles
+        .iter()
+        .filter(|t| t.quest_tile.is_some() && !sg1_quest_positions.contains(&(t.s, t.t)))
+        .collect();
+
+    println!("Quest tiles in sg1: {}", sg1_quest_positions.len());
+    println!("New quest tiles in sg2: {}", new_quest_tiles.len());
+    for t in &new_quest_tiles {
+        let qt = t.quest_tile.as_ref().unwrap();
+        println!("  hex=({}, {}), tile_id={}", t.s, t.t, qt.quest_tile_id.0);
+    }
+
+    // The preplaced_tiles list is identical in both saves (same seed).
+    // Try to find unplaced preplaced tiles: those whose section coords
+    // don't correspond to any placed quest tile.
+    // First, let's see if there's a pattern: what's the range of hex coords
+    // for quest tiles?
+    let all_quest_hexes: Vec<_> = sg2
+        .tiles
+        .iter()
+        .filter_map(|t| {
+            t.quest_tile
+                .as_ref()
+                .map(|qt| (t.s, t.t, qt.quest_tile_id.0))
+        })
+        .collect();
+    let s_min = all_quest_hexes.iter().map(|x| x.0).min().unwrap();
+    let s_max = all_quest_hexes.iter().map(|x| x.0).max().unwrap();
+    let t_min = all_quest_hexes.iter().map(|x| x.1).min().unwrap();
+    let t_max = all_quest_hexes.iter().map(|x| x.1).max().unwrap();
+    println!("Quest hex ranges: s=[{s_min}, {s_max}], t=[{t_min}, {t_max}]");
+
+    let sec_s_min = sg2
+        .preplaced_tiles
+        .iter()
+        .map(|p| p.section_grid_pos_x)
+        .min()
+        .unwrap();
+    let sec_s_max = sg2
+        .preplaced_tiles
+        .iter()
+        .map(|p| p.section_grid_pos_x)
+        .max()
+        .unwrap();
+    let sec_t_min = sg2
+        .preplaced_tiles
+        .iter()
+        .map(|p| p.section_grid_pos_y)
+        .min()
+        .unwrap();
+    let sec_t_max = sg2
+        .preplaced_tiles
+        .iter()
+        .map(|p| p.section_grid_pos_y)
+        .max()
+        .unwrap();
+    println!("Section ranges: x=[{sec_s_min}, {sec_s_max}], y=[{sec_t_min}, {sec_t_max}]");
+
+    // Compute approximate scale
+    let hex_s_range = (s_max - s_min) as f64;
+    let hex_t_range = (t_max - t_min) as f64;
+    let sec_s_range = (sec_s_max - sec_s_min) as f64;
+    let sec_t_range = (sec_t_max - sec_t_min) as f64;
+    println!(
+        "Approx scale: s={:.1}, t={:.1}",
+        hex_s_range / sec_s_range,
+        hex_t_range / sec_t_range
+    );
+
+    // Are preplaced_tiles identical between the two saves?
+    println!(
+        "Preplaced count sg1={}, sg2={}",
+        sg1.preplaced_tiles.len(),
+        sg2.preplaced_tiles.len()
+    );
+    let same = sg1
+        .preplaced_tiles
+        .iter()
+        .zip(sg2.preplaced_tiles.iter())
+        .all(|(a, b)| {
+            a.section_grid_pos_x == b.section_grid_pos_x
+                && a.section_grid_pos_y == b.section_grid_pos_y
+                && a.preplaced_tile_id.0 == b.preplaced_tile_id.0
+        });
+    println!("Preplaced tiles identical: {same}");
+
+    // Count how many quest tiles in sg2 exist per quest_tile_id
+    let mut id_counts: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
+    for qt in all_quest_hexes.iter() {
+        *id_counts.entry(qt.2).or_default() += 1;
+    }
+    println!("\nQuest tile_id counts (placed in sg2):");
+    let mut counts: Vec<_> = id_counts.iter().collect();
+    counts.sort();
+    for (id, count) in &counts {
+        println!("  tile_id={id}: {count}");
+    }
+    println!("Total placed quest tiles: {}", all_quest_hexes.len());
+    println!("Total preplaced entries: {}", sg2.preplaced_tiles.len());
+
+    let sg = sg2;
+    // Build a map from quest_tile_id to all hex positions where that quest tile was placed.
+    use std::collections::HashMap;
+    let mut quest_positions: HashMap<i32, Vec<(i32, i32)>> = HashMap::new();
+    for t in &sg.tiles {
+        if let Some(qt) = &t.quest_tile {
+            quest_positions
+                .entry(qt.quest_tile_id.0)
+                .or_default()
+                .push((t.s, t.t));
+        }
+    }
+
+    println!("Preplaced tiles: {}", sg.preplaced_tiles.len());
+    println!("Quest tiles on map:");
+    for (id, positions) in &quest_positions {
+        println!("  tile_id={id}: {positions:?}");
+    }
+
+    // For each placed quest tile, find which preplaced entry could map to it.
+    // Group placed quest tiles by their position and see if section coords correlate.
+    println!("\nPlaced quest tiles with their hex positions:");
+    for t in &sg.tiles {
+        if let Some(qt) = &t.quest_tile {
+            println!(
+                "  hex=({}, {}), quest_tile_id={}, target={}",
+                t.s, t.t, qt.quest_tile_id.0, qt.target_value
+            );
+        }
+    }
+
+    // Try to find the mapping: for each preplaced tile, find a placed quest tile
+    // with matching quest_tile_id that hasn't been claimed yet.
+    // Then compute section -> hex relationship.
+    println!("\nSection -> Hex mapping attempts:");
+    let mut used_hex: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+    for pt in &sg.preplaced_tiles {
+        let candidates: Vec<_> = sg
+            .tiles
+            .iter()
+            .filter(|t| {
+                t.quest_tile
+                    .as_ref()
+                    .map_or(false, |qt| qt.quest_tile_id.0 == pt.preplaced_tile_id.0)
+                    && !used_hex.contains(&(t.s, t.t))
+            })
+            .collect();
+        if candidates.len() == 1 {
+            let t = candidates[0];
+            used_hex.insert((t.s, t.t));
+            println!(
+                "  section=({}, {}) => hex=({}, {}), tile_id={} [UNIQUE]",
+                pt.section_grid_pos_x, pt.section_grid_pos_y, t.s, t.t, pt.preplaced_tile_id.0
+            );
+        } else {
+            println!(
+                "  section=({}, {}), tile_id={} => {} candidates",
+                pt.section_grid_pos_x,
+                pt.section_grid_pos_y,
+                pt.preplaced_tile_id.0,
+                candidates.len()
+            );
+        }
+    }
 }
 
 #[test]
@@ -306,10 +489,7 @@ fn test_map_next_tile_exists() {
     let sg = load_dorfromantik();
     let map = build_map(&sg);
 
-    assert!(
-        !map.next_tile.is_empty(),
-        "Next tile should have segments"
-    );
+    assert!(!map.next_tile.is_empty(), "Next tile should have segments");
 }
 
 #[test]
@@ -322,7 +502,10 @@ fn test_map_next_tile_rendered() {
         .rendered_next_tile
         .iter()
         .any(|t| *t != Terrain::Empty && *t != Terrain::Missing);
-    assert!(has_terrain, "Next tile should have at least one terrain side");
+    assert!(
+        has_terrain,
+        "Next tile should have at least one terrain side"
+    );
 }
 
 #[test]
@@ -362,7 +545,10 @@ fn test_map_neighbor_positions() {
     for rotation in 0..HEX_SIDES {
         let neighbor = Map::neighbor_pos_of(origin, rotation);
         let back = Map::neighbor_pos_of(neighbor, Map::opposite_side(rotation));
-        assert_eq!(back, origin, "Neighbor roundtrip failed for rotation {rotation}");
+        assert_eq!(
+            back, origin,
+            "Neighbor roundtrip failed for rotation {rotation}"
+        );
     }
 }
 
@@ -721,7 +907,9 @@ fn test_terrain_rail_connects_to_station() {
 fn test_form_from_segment_type_id_all_known() {
     use dorfromantische2_rs::raw_data::SegmentTypeId;
 
-    let known_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 102, 105, 109, 111];
+    let known_ids = [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 102, 105, 109, 111,
+    ];
     for id in known_ids {
         let _form: Form = (&SegmentTypeId(id)).into();
     }
@@ -772,8 +960,11 @@ fn print_biggame_quests() {
                     .unwrap_or_else(|| "?".into());
                 println!(
                     "quest_id={} terrain={terrain} level={} queue={} challenge={} target={}",
-                    qt.quest_id.0, qt.quest_level, qt.quest_queue_index,
-                    qt.unlocked_challenge_id.0, qt.target_value,
+                    qt.quest_id.0,
+                    qt.quest_level,
+                    qt.quest_queue_index,
+                    qt.unlocked_challenge_id.0,
+                    qt.target_value,
                 );
             }
         }

@@ -28,6 +28,7 @@ fn render_side_panel(
     sidebar_expanded: &mut bool,
     show_tooltip: &mut bool,
     show_groups: &mut bool,
+    show_biggest_groups: &mut bool,
 ) {
     egui::SidePanel::left("left_panel").show_animated(ctx, *sidebar_expanded, |ui| {
         ui.label(egui::RichText::new("Orientation").size(20.0).underline());
@@ -59,6 +60,7 @@ fn render_side_panel(
         ui.label(egui::RichText::new("Overlays").size(20.0).underline());
         ui.checkbox(show_tooltip, "Show tooltip");
         ui.checkbox(show_groups, "Show quest labels");
+        ui.checkbox(show_biggest_groups, "Show biggest groups");
         ui.add_space(10.0);
 
         ui.label(egui::RichText::new("Section style").size(20.0).underline());
@@ -90,24 +92,67 @@ fn render_side_panel(
         egui::Grid::new("placement_options").show(ui, |ui| {
             ui.label("Show");
             ui.label("Pos");
-            ui.label("Matched");
-            ui.label("Group diffs");
+            ui.label("Edges");
+            ui.label("Bonus");
+            ui.label("Diff");
+            ui.label("Crowd");
+            ui.label("Ends");
+            ui.label("Groups");
             ui.end_row();
 
+            let max_edges = app
+                .best_placements
+                .iter_usable()
+                .next()
+                .map(|(_, s)| s.matching_edges);
             let mut clicked_row = None;
-            for (rank, score) in app.best_placements.iter_usable() {
+            for (rank, score) in app.best_placements.iter_all() {
+                let is_best = max_edges == Some(score.matching_edges);
+                let color = if is_best {
+                    Color32::WHITE
+                } else {
+                    Color32::from_rgb(120, 120, 120)
+                };
+
                 ui.checkbox(&mut app.show_placements[rank], "");
-                let label = Label::new(format!("{}", score.pos));
-                if ui.add(label.sense(Sense::click())).clicked() {
+                let text = egui::RichText::new(format!("{}", score.pos)).color(color);
+                if ui.add(Label::new(text).sense(Sense::click())).clicked() {
                     clicked_row = Some(score.pos);
                 }
-                ui.label(format!("{}", score.matching_edges));
+                ui.label(egui::RichText::new(format!("{}", score.matching_edges)).color(color));
+                let bonus_color = if score.neighbor_bonus > 0 {
+                    Color32::from_rgb(80, 200, 80)
+                } else {
+                    color
+                };
+                ui.label(
+                    egui::RichText::new(format!("{}", score.neighbor_bonus)).color(bonus_color),
+                );
+                ui.label(
+                    egui::RichText::new(format!("{}", score.connection_difficulty)).color(color),
+                );
+                let crowd_color = if score.crowding > 0 {
+                    Color32::from_rgb(220, 80, 80)
+                } else {
+                    color
+                };
+                ui.label(egui::RichText::new(format!("{}", score.crowding)).color(crowd_color));
+                let end_color = if score.open_end_delta > 0 {
+                    Color32::from_rgb(220, 80, 80)
+                } else if score.open_end_delta < 0 {
+                    Color32::from_rgb(80, 200, 80)
+                } else {
+                    color
+                };
+                ui.label(
+                    egui::RichText::new(format!("{:+}", score.open_end_delta)).color(end_color),
+                );
                 let group_diffs = score
                     .group_edge_alterations
                     .iter()
                     .map(|g| format!("{} => {}", g.group_size, g.diff))
                     .collect::<Vec<_>>();
-                ui.label(format!("{group_diffs:?}"));
+                ui.label(egui::RichText::new(format!("{group_diffs:?}")).color(color));
                 ui.end_row();
             }
             if let Some(pos) = clicked_row {
@@ -198,12 +243,11 @@ fn render_next_tile(app: &App, ctx: &egui::Context) {
     egui::Area::new("next_tile")
         .anchor(egui::Align2::RIGHT_BOTTOM, (-20.0, -20.0))
         .show(ctx, |ui| {
+            let has_quest = app.map.next_tile_quest.is_some();
+            let height = size * 2.0 + if has_quest { 50.0 } else { 30.0 };
             let (response, painter) =
-                ui.allocate_painter(egui::vec2(size * 2.0 + 10.0, size * 2.0 + 30.0), Sense::hover());
-            let center = Pos2::new(
-                response.rect.center().x,
-                response.rect.center().y + 5.0,
-            );
+                ui.allocate_painter(egui::vec2(size * 2.0 + 10.0, height), Sense::hover());
+            let center = Pos2::new(response.rect.center().x, response.rect.min.y + 15.0 + size);
 
             // Draw label.
             painter.text(
@@ -218,11 +262,9 @@ fn render_next_tile(app: &App, ctx: &egui::Context) {
             // Vertices go from top, clockwise.
             let hex_vertices: Vec<Pos2> = (0..6)
                 .map(|i| {
-                    let angle = std::f32::consts::FRAC_PI_3 * i as f32 - std::f32::consts::FRAC_PI_2;
-                    Pos2::new(
-                        center.x + size * angle.cos(),
-                        center.y + size * angle.sin(),
-                    )
+                    let angle =
+                        std::f32::consts::FRAC_PI_3 * i as f32 - std::f32::consts::FRAC_PI_2;
+                    Pos2::new(center.x + size * angle.cos(), center.y + size * angle.sin())
                 })
                 .collect();
 
@@ -332,9 +374,63 @@ fn render_group_quest_labels(app: &App, ctx: &egui::Context, visible_rect: egui:
                 egui::Frame::popup(ui.style())
                     .fill(Color32::from_black_alpha(180))
                     .show(ui, |ui| {
+                        ui.label(egui::RichText::new(text).color(Color32::WHITE));
+                    });
+            });
+    }
+}
+
+fn render_biggest_groups(app: &App, ctx: &egui::Context, visible_rect: egui::Rect) {
+    if visible_rect.width() <= 0.0 || visible_rect.height() <= 0.0 {
+        return;
+    }
+
+    use std::collections::HashMap;
+    // Find the biggest group (by segment count) for each terrain type.
+    let mut biggest: HashMap<Terrain, (usize, &crate::group::Group)> = HashMap::new();
+    for (idx, group) in app.group_assignments.groups.iter().enumerate() {
+        if group.is_closed() {
+            continue;
+        }
+        let size = group.segment_indices.len();
+        let entry = biggest.entry(group.terrain).or_insert((idx, group));
+        if size > entry.1.segment_indices.len() {
+            *entry = (idx, group);
+        }
+    }
+
+    for (terrain, (group_idx, group)) in &biggest {
+        let centroid_hex = glam::IVec2::new(
+            group.centroid.x.round() as i32,
+            group.centroid.y.round() as i32,
+        );
+        let centroid = app.hex_to_pixel(centroid_hex);
+
+        let margin = 50.0;
+        if centroid.x < visible_rect.min.x - margin
+            || centroid.y < visible_rect.min.y - margin
+            || centroid.x > visible_rect.max.x + margin
+            || centroid.y > visible_rect.max.y + margin
+        {
+            continue;
+        }
+
+        let size = group.segment_indices.len();
+        let text = format!("{terrain:?}: {size} segments, {} units", group.unit_count);
+
+        let id = egui::Id::new(("biggest_group", *group_idx));
+        egui::Area::new(id)
+            .order(egui::Order::Background)
+            .fixed_pos(Pos2::new(centroid.x, centroid.y))
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style())
+                    .fill(Color32::from_black_alpha(200))
+                    .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(text)
-                                .color(Color32::WHITE),
+                                .color(Color32::from_rgb(255, 215, 0))
+                                .size(13.0),
                         );
                     });
             });
@@ -357,14 +453,32 @@ pub fn render_ui(
     sidebar_expanded: &mut bool,
     show_tooltip: &mut bool,
     show_groups: &mut bool,
+    show_biggest_groups: &mut bool,
 ) {
     render_top_panel(app, ctx, sidebar_expanded);
-    render_side_panel(app, ctx, sidebar_expanded, show_tooltip, show_groups);
+    render_side_panel(
+        app,
+        ctx,
+        sidebar_expanded,
+        show_tooltip,
+        show_groups,
+        show_biggest_groups,
+    );
     // Available rect after panels have claimed their space.
     let visible_rect = ctx.available_rect();
+    let full_rect = ctx.screen_rect();
+    if full_rect.width() > 0.0 && full_rect.height() > 0.0 {
+        app.visible_fraction = glam::Vec2::new(
+            visible_rect.width() / full_rect.width(),
+            visible_rect.height() / full_rect.height(),
+        );
+    }
     render_tooltip(app, ctx, show_tooltip);
     if *show_groups {
         render_group_quest_labels(app, ctx, visible_rect);
+    }
+    if *show_biggest_groups {
+        render_biggest_groups(app, ctx, visible_rect);
     }
     render_map_loader(app, ctx);
     render_next_tile(app, ctx);

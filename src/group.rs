@@ -2,12 +2,16 @@ use std::collections::HashSet;
 
 use glam::Vec2;
 
-use crate::{data::{Pos, Segment}, map::{Quest, SegmentIndex}};
+use crate::{
+    data::{Pos, Segment},
+    map::{Quest, SegmentIndex},
+};
 
 /// Index into the groups array, identifying a connected terrain group.
 pub type GroupIndex = usize;
 
 pub struct Group {
+    pub terrain: crate::data::Terrain,
     pub segment_indices: HashSet<SegmentIndex>,
     pub open_edges: HashSet<Pos>,
     /// Quests that target this group (placed on tiles belonging to this group).
@@ -38,7 +42,10 @@ impl Group {
     }
 
     /// Compute total units from the group's segments.
-    pub fn compute_unit_count(segment_indices: &HashSet<SegmentIndex>, segments: &[Segment]) -> u32 {
+    pub fn compute_unit_count(
+        segment_indices: &HashSet<SegmentIndex>,
+        segments: &[Segment],
+    ) -> u32 {
         segment_indices
             .iter()
             .map(|&i| segments[i].unit_count)

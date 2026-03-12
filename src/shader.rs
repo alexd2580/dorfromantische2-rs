@@ -79,7 +79,7 @@ pub unsafe fn write_map_to(
         }
     }
 
-    for (rank, score) in best_placements.iter_usable() {
+    for (rank, score) in best_placements.iter_all() {
         let tile_index = map.tile_key(score.pos).unwrap();
         let tile = &mut *tiles_ptr.add(tile_index);
         tile.placement_rank = rank as i32;

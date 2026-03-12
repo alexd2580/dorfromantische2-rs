@@ -319,5 +319,9 @@ fn navigate() {
     screen.sleep_ms(SCROLL_PAUSE_MS);
 
     screen.warp_mouse(IVec2::new(MONITOR_WIDTH + 1, MONITOR_HEIGHT / 2));
-    screen.mouse_drag(1, IVec2::new(2 * MONITOR_WIDTH - 1, MONITOR_HEIGHT / 2), 5.0);
+    screen.mouse_drag(
+        1,
+        IVec2::new(2 * MONITOR_WIDTH - 1, MONITOR_HEIGHT / 2),
+        5.0,
+    );
 }

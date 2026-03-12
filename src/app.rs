@@ -169,8 +169,10 @@ pub struct App {
     // Window data.
     /// Size of the window.
     pub size: UVec2,
-    /// Aspect ration of the window.
+    /// Aspect ratio of the window.
     aspect_ratio: f32,
+    /// Fraction of window width that is visible (not covered by sidebar/panels).
+    pub visible_fraction: Vec2,
 
     // Mouse state.
     /// Mouse position in window coordinates.
@@ -304,6 +306,7 @@ impl App {
             // Window data.
             size: UVec2::ZERO,
             aspect_ratio: 0.0,
+            visible_fraction: Vec2::ONE,
 
             // Mouse state.
             mouse_position: Vec2::ZERO,
@@ -426,7 +429,8 @@ impl App {
     }
 
     pub fn on_scroll(&mut self, y: f32) {
-        self.inv_scale.set(MIN_ZOOM.max(*self.inv_scale - y).min(MAX_ZOOM));
+        self.inv_scale
+            .set(MIN_ZOOM.max(*self.inv_scale - y).min(MAX_ZOOM));
     }
 
     #[allow(clippy::cast_ptr_alignment, clippy::similar_names)]
@@ -526,7 +530,10 @@ impl App {
             self.map = map;
             self.group_assignments = groups;
             self.best_placements = best_placements;
-            self.show_placements = [true; MAX_SHOWN_PLACEMENTS];
+            self.show_placements = [false; MAX_SHOWN_PLACEMENTS];
+            for (rank, _) in self.best_placements.iter_usable() {
+                self.show_placements[rank] = true;
+            }
             self.zoom_fit();
 
             let map_byte_size = shader::byte_size(&self.map);
@@ -539,7 +546,10 @@ impl App {
     }
 
     pub fn goto(&mut self, pos: Pos) {
-        self.origin.set_target(Self::hex_to_world(pos));
+        let world = Self::hex_to_world(pos);
+        let sidebar_offset = (1.0 - self.visible_fraction.x) * 0.5 * self.aspect_ratio * GOTO_ZOOM;
+        self.origin
+            .set_target(world - Vec2::new(sidebar_offset, 0.0));
         self.inv_scale.set_target(GOTO_ZOOM);
     }
 
@@ -578,11 +588,19 @@ impl App {
         let size = self.map.index_size;
         let y_extents = self.map.world_y_extents;
         let center = Pos::new(offset.x + size.x / 2, (y_extents.y + y_extents.x) / 2);
-        self.origin.set_target(App::hex_to_world(center));
+        let world_center = App::hex_to_world(center);
 
-        let xfit = (size.x as f32 * 1.5) / self.aspect_ratio;
-        let yfit = (y_extents.y - y_extents.x) as f32 * 2.0 * COS_30;
+        let effective_aspect = self.aspect_ratio * self.visible_fraction.x;
+        let xfit = (size.x as f32 * 1.5) / effective_aspect;
+        let yfit = (y_extents.y - y_extents.x) as f32 * 2.0 * COS_30 / self.visible_fraction.y;
+        let inv_scale = xfit.max(yfit);
 
-        self.inv_scale.set_target(xfit.max(yfit));
+        // Shift center to account for sidebar: the visible area starts at
+        // (1 - visible_fraction.x) of the full width, so the visible center
+        // is offset to the right by half the sidebar fraction.
+        let sidebar_offset = (1.0 - self.visible_fraction.x) * 0.5 * self.aspect_ratio * inv_scale;
+        self.origin
+            .set_target(world_center - Vec2::new(sidebar_offset, 0.0));
+        self.inv_scale.set_target(inv_scale);
     }
 }

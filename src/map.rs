@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use crate::{
     data::{
-        quest_terrain, segments_from_quest_tile, segments_from_special_tile_id, HEX_SIDES, Pos,
-        Rotation, Segment, Terrain,
+        quest_terrain, segments_from_quest_tile, segments_from_special_tile_id, Pos, Rotation,
+        Segment, Terrain, HEX_SIDES,
     },
     raw_data,
 };
@@ -207,7 +207,14 @@ impl Map {
             pos_map.push((pos, segment_base_index, segment_count));
         }
 
-        (pos_map, segments, quests, index_min, index_max, world_y_extents)
+        (
+            pos_map,
+            segments,
+            quests,
+            index_min,
+            index_max,
+            world_y_extents,
+        )
     }
 
     /// Build the spatial index and per-rotation rendered tile lookups.
