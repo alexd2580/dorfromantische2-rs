@@ -7,6 +7,7 @@ use x11::xtest;
 
 // const ALLPLANES: u64 = 0xFFFFFFFFFFFFFFFF;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Screen {
     pub display: *mut xlib::_XDisplay,
@@ -14,6 +15,7 @@ pub struct Screen {
     pub screen_size: IVec2,
 }
 
+#[allow(dead_code)]
 impl Screen {
     pub fn new() -> Self {
         // SAFETY: X11 FFI calls. XOpenDisplay returns a valid display pointer or null
@@ -297,6 +299,7 @@ impl Drop for Screen {
     }
 }
 
+#[allow(dead_code)]
 fn navigate() {
     const MONITOR_WIDTH: i32 = 2560;
     const MONITOR_HEIGHT: i32 = 1440;

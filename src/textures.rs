@@ -54,7 +54,7 @@ impl Textures {
         }
     }
 
-    pub fn binding_resources(&self) -> impl Iterator<Item = (u32, wgpu::BindingResource)> {
+    pub fn binding_resources(&self) -> impl Iterator<Item = (u32, wgpu::BindingResource<'_>)> {
         [
             (2, wgpu::BindingResource::Sampler(&self.texture_sampler)),
             (3, wgpu::BindingResource::TextureView(&self.forest_view)),

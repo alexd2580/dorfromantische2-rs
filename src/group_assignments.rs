@@ -74,8 +74,7 @@ impl<'a> GroupAnalyzer<'a> {
         self.segment_queue.push(segment_index);
         self.discovered_segments
             .insert((segment_index, group_terrain));
-        while !self.segment_queue.is_empty() {
-            let segment_index = self.segment_queue.pop().unwrap();
+        while let Some(segment_index) = self.segment_queue.pop() {
             segment_indices.insert(segment_index);
 
             let segment = self.map.segment(segment_index);

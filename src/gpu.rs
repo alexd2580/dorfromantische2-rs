@@ -13,11 +13,11 @@ pub struct Buffer {
 }
 
 impl Buffer {
-    pub fn binding(&self) -> wgpu::BindingResource {
+    pub fn binding(&self) -> wgpu::BindingResource<'_> {
         self.buffer.as_entire_binding()
     }
 
-    pub fn write<'a>(&'a self, gpu: &'a Gpu) -> wgpu::QueueWriteBufferView {
+    pub fn write<'a>(&'a self, gpu: &'a Gpu) -> wgpu::QueueWriteBufferView<'a> {
         let view_buffer_size = self.size.try_into().unwrap();
         gpu.queue
             .write_buffer_with(&self.buffer, 0, view_buffer_size)

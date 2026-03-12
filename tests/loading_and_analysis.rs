@@ -3,7 +3,6 @@ use dorfromantische2_rs::data::{EdgeMatch, Form, Pos, Terrain, HEX_SIDES};
 use dorfromantische2_rs::group_assignments::GroupAssignments;
 use dorfromantische2_rs::map::Map;
 use dorfromantische2_rs::raw_data::{self, SaveGame};
-use glam::IVec2;
 use std::io::Cursor;
 
 // ===========================================================================
@@ -288,7 +287,7 @@ fn dump_preplaced_tiles() {
             .filter(|t| {
                 t.quest_tile
                     .as_ref()
-                    .map_or(false, |qt| qt.quest_tile_id.0 == pt.preplaced_tile_id.0)
+                    .is_some_and(|qt| qt.quest_tile_id.0 == pt.preplaced_tile_id.0)
                     && !used_hex.contains(&(t.s, t.t))
             })
             .collect();
@@ -948,7 +947,7 @@ fn dump_active_challenges_structure() {
 fn print_biggame_quests() {
     let save = load_biggame();
     let map = Map::from(&save);
-    let groups = GroupAssignments::from(&map);
+    let _groups = GroupAssignments::from(&map);
 
     use dorfromantische2_rs::data::quest_terrain;
     // Dump quest fields to find the exact/more-than indicator.

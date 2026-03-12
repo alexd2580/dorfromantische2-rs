@@ -1,0 +1,13 @@
+#!/bin/sh
+
+# Auto-fix formatting
+cargo fmt
+git diff --name-only | xargs -r git add
+
+# Auto-fix clippy lints
+cargo clippy --all-targets --fix --allow-dirty --allow-staged 2>/dev/null
+git diff --name-only | xargs -r git add
+
+# Final check: fail if issues remain
+cargo fmt -- --check || { echo "cargo fmt failed"; exit 1; }
+cargo clippy --all-targets -- -D warnings || { echo "clippy failed"; exit 1; }

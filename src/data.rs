@@ -292,7 +292,7 @@ impl Segment {
     }
 
     pub fn contains_rotation(&self, rotation: Rotation) -> bool {
-        self.rotations().find(|r| r == &rotation).is_some()
+        self.rotations().any(|r| r == rotation)
     }
 }
 
@@ -303,7 +303,7 @@ type SegmentDef = (Form, Terrain, usize, u32);
 fn wheat_tile_segments(id: i32) -> Option<Vec<SegmentDef>> {
     Some(match id {
         // 2AA_4AF (Normal, BigTree, Granary, Windmill)
-        2 | 3 | 4 | 5 => vec![
+        2..=5 => vec![
             (Form::Size2, Terrain::Wheat, 5, 1),
             (Form::Size4, Terrain::Forest, 1, 21),
         ],
@@ -316,7 +316,7 @@ fn wheat_tile_segments(id: i32) -> Option<Vec<SegmentDef>> {
             (Form::Size1, Terrain::House, 5, 1),
         ],
         // 3AA_1AV (Normal, Granary, Windmill)
-        6 | 7 | 8 => vec![
+        6..=8 => vec![
             (Form::Size3, Terrain::Wheat, 3, 1),
             (Form::Size1, Terrain::House, 0, 1),
         ],
@@ -332,7 +332,7 @@ fn wheat_tile_segments(id: i32) -> Option<Vec<SegmentDef>> {
             (Form::Size1, Terrain::Forest, 5, 1),
         ],
         // 6AA (Normal, BigTree, Windmill)
-        13 | 14 | 15 => vec![(Form::Size6, Terrain::Wheat, 0, 3)],
+        13..=15 => vec![(Form::Size6, Terrain::Wheat, 0, 3)],
         _ => return None,
     })
 }
@@ -343,7 +343,7 @@ fn forest_tile_segments(id: i32) -> Option<Vec<SegmentDef>> {
         // 1AF (Normal, Deer, Bear, Boar)
         16 | 19 | 65 | 66 => vec![(Form::Size1, Terrain::Forest, 0, 1)],
         // 2AF (Normal, Deer, Bear, Boar)
-        67 | 68 | 69 | 70 => vec![(Form::Size2, Terrain::Forest, 0, 2)],
+        67..=70 => vec![(Form::Size2, Terrain::Forest, 0, 2)],
         // 3AF (Normal, Deer, Bear, Boar)
         20 | 21 | 71 | 72 => vec![(Form::Size3, Terrain::Forest, 0, 17)],
         // 4AF (Normal, Ruin)

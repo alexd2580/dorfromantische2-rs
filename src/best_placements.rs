@@ -65,6 +65,7 @@ pub struct BestPlacements {
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 struct SegmentEffects {
     connects_to: Vec<GroupIndex>,
     blocks: Vec<GroupIndex>,

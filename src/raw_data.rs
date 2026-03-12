@@ -322,6 +322,7 @@ impl TryFrom<&Value> for SaveGame {
 }
 
 /// Dump the raw NRBF structure of the first tile for debugging.
+#[allow(dead_code)]
 pub fn dump_first_tile(value: &Value) -> String {
     if let Value::Object(_, values) = value {
         if let Ok(tiles) = try_key_of(values, "tiles") {
@@ -338,6 +339,7 @@ pub fn dump_first_tile(value: &Value) -> String {
 }
 
 /// Dump the raw NRBF value of `activeChallenges` for debugging.
+#[allow(dead_code)]
 pub fn dump_active_challenges(value: &Value) -> String {
     if let Value::Object(_, values) = value {
         if let Ok(val) = try_key_of(values, "activeChallenges") {
@@ -353,6 +355,7 @@ pub fn dump_active_challenges(value: &Value) -> String {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct GameModeId(pub i32);
 

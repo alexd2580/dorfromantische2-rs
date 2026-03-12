@@ -55,6 +55,7 @@ impl QuestType {
         }
     }
 
+    #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
             QuestType::MoreThan => ">=",
@@ -65,6 +66,7 @@ impl QuestType {
 }
 
 /// A quest placed on a tile, targeting a specific terrain group size.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Quest {
     pub terrain: Terrain,
@@ -76,6 +78,19 @@ pub struct Quest {
     pub quest_queue_index: i32,
     pub unlocked_challenge_id: i32,
 }
+
+type TileData = (
+    Vec<(Pos, usize, usize)>,
+    Vec<Segment>,
+    HashMap<Pos, Quest>,
+    IVec2,
+    IVec2,
+    IVec2,
+);
+type IndexData = (
+    Vec<Option<(SegmentIndex, SegmentCount)>>,
+    Vec<Option<[Option<SegmentIndex>; HEX_SIDES]>>,
+);
 
 pub struct Map {
     /// Defines the smallest possible coordinate in the index.
@@ -161,16 +176,7 @@ impl Map {
     }
 
     /// Load all tiles from the savegame, accumulating positions, segments, quests, and map bounds.
-    fn load_all_tiles(
-        savegame: &raw_data::SaveGame,
-    ) -> (
-        Vec<(Pos, usize, usize)>,
-        Vec<Segment>,
-        HashMap<Pos, Quest>,
-        IVec2,
-        IVec2,
-        IVec2,
-    ) {
+    fn load_all_tiles(savegame: &raw_data::SaveGame) -> TileData {
         let mut index_min = IVec2::ZERO;
         let mut index_max = IVec2::ZERO;
         let mut world_y_extents = IVec2::new(i32::MAX, i32::MIN);
@@ -223,10 +229,7 @@ impl Map {
         segments: &[Segment],
         index_offset: IVec2,
         index_size: IVec2,
-    ) -> (
-        Vec<Option<(SegmentIndex, SegmentCount)>>,
-        Vec<Option<[Option<SegmentIndex>; HEX_SIDES]>>,
-    ) {
+    ) -> IndexData {
         let index_length = usize::try_from(index_size.x * index_size.y).unwrap();
         let mut tile_index = vec![None; index_length];
         let mut rendered_tiles = vec![None; index_length];
@@ -236,8 +239,12 @@ impl Map {
             tile_index[position_key] = Some((segment_base_index, segment_count));
 
             let mut rendered = [None; HEX_SIDES];
-            for segment_index in segment_base_index..segment_base_index + segment_count {
-                let segment = &segments[segment_index];
+            for (segment_index, segment) in segments
+                .iter()
+                .enumerate()
+                .skip(segment_base_index)
+                .take(segment_count)
+            {
                 for rotation in segment.rotations() {
                     rendered[rotation] = Some(segment_index);
                 }
@@ -333,7 +340,7 @@ impl Map {
     }
 
     pub fn segment_indices_at(&self, pos: Pos) -> Option<Range<SegmentIndex>> {
-        self.tile_index[self.tile_key(pos)?].map(|(index, count)| (index..index + count))
+        self.tile_index[self.tile_key(pos)?].map(|(index, count)| index..index + count)
     }
 
     /// Important: returns None if either there is no tile there

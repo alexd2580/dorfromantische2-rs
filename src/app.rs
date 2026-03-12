@@ -25,6 +25,7 @@ const MIN_ZOOM: f32 = 5.0;
 const MAX_ZOOM: f32 = 500.0;
 const DEFAULT_ZOOM: f32 = 20.0;
 const GOTO_ZOOM: f32 = 30.0;
+#[allow(dead_code)]
 const INITIAL_SHOWN_PLACEMENTS: usize = 5;
 
 #[derive(Default)]
@@ -395,9 +396,8 @@ impl App {
         let delta = (pos - self.mouse_position) / self.size.as_vec2();
 
         if self.grab_move {
-            self.origin.set(
-                *self.origin + Vec2::new(-1.0 * self.aspect_ratio, 1.0) * delta * *self.inv_scale,
-            );
+            self.origin
+                .set(*self.origin + Vec2::new(-self.aspect_ratio, 1.0) * delta * *self.inv_scale);
         }
 
         if self.grab_rotate {
