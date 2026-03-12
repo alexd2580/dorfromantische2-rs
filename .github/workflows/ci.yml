@@ -18,14 +18,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # nrbf-rs is a sibling path dependency (../nrbf-rs).
-      # Adjust the repository below to match your fork/org.
-      - name: Checkout nrbf-rs
-        uses: actions/checkout@v4
-        with:
-          repository: alexd2580/nrbf-rs
-          path: ../nrbf-rs
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
