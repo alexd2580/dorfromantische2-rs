@@ -25,6 +25,7 @@ mod raw_data;
 mod render_ui;
 mod shader;
 mod textures;
+mod tile_frequency;
 
 mod opencv;
 mod xlib;
@@ -71,7 +72,8 @@ fn run(
 ) {
     let mut show_tooltip = false;
     let mut show_groups = false;
-    let mut show_biggest_groups = false;
+    let mut show_biggest_groups = true;
+    let mut show_tile_frequencies = false;
     let mut sidebar_expanded = true;
     event_loop.run(move |event, _, control_flow| {
         // What the actual??
@@ -158,6 +160,7 @@ fn run(
                         &mut show_tooltip,
                         &mut show_groups,
                         &mut show_biggest_groups,
+                        &mut show_tile_frequencies,
                     );
                 });
 

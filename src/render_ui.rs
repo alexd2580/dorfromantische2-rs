@@ -29,138 +29,229 @@ fn render_side_panel(
     show_tooltip: &mut bool,
     show_groups: &mut bool,
     show_biggest_groups: &mut bool,
+    show_tile_frequencies: &mut bool,
 ) {
     egui::SidePanel::left("left_panel").show_animated(ctx, *sidebar_expanded, |ui| {
-        ui.label(egui::RichText::new("Orientation").size(20.0).underline());
-        ui.horizontal(|ui| {
-            ui.label("Goto");
-            let size = ui.available_size();
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.label(egui::RichText::new("Orientation").size(20.0).underline());
+            ui.horizontal(|ui| {
+                ui.label("Goto");
+                let size = ui.available_size();
 
-            let edit_x = egui::TextEdit::singleline(&mut app.goto_x);
-            ui.add_sized((size.x / 3.0, size.y), edit_x);
+                let edit_x = egui::TextEdit::singleline(&mut app.goto_x);
+                ui.add_sized((size.x / 3.0, size.y), edit_x);
 
-            let edit_y = egui::TextEdit::singleline(&mut app.goto_y);
-            let response = ui.add_sized((size.x / 3.0, size.y), edit_y);
+                let edit_y = egui::TextEdit::singleline(&mut app.goto_y);
+                let response = ui.add_sized((size.x / 3.0, size.y), edit_y);
 
-            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                app.submit_goto();
-            }
-        });
-        ui.horizontal(|ui| {
-            let slider = egui::Slider::new(&mut app.inv_scale.target, 5.0..=500.0).text("Zoom out");
-            if ui.add(slider).changed() {
-                app.inv_scale.set(app.inv_scale.target);
-            }
-            if ui.button("Zoom fit").clicked() {
-                app.zoom_fit();
-            }
-        });
-        ui.add_space(10.0);
-
-        ui.label(egui::RichText::new("Overlays").size(20.0).underline());
-        ui.checkbox(show_tooltip, "Show tooltip");
-        ui.checkbox(show_groups, "Show quest labels");
-        ui.checkbox(show_biggest_groups, "Show biggest groups");
-        ui.add_space(10.0);
-
-        ui.label(egui::RichText::new("Section style").size(20.0).underline());
-        ui.selectable_value(&mut app.section_style, 0, "Color by terrain type");
-        ui.selectable_value(&mut app.section_style, 1, "Color by group statically");
-        ui.selectable_value(&mut app.section_style, 2, "Color by group dynamically");
-        ui.selectable_value(&mut app.section_style, 3, "Color by texture");
-        ui.add_space(10.0);
-
-        ui.label(
-            egui::RichText::new("Group display options")
-                .size(20.0)
-                .underline(),
-        );
-        ui.label("Closed groups");
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut app.closed_group_style, 0, "Show");
-            ui.selectable_value(&mut app.closed_group_style, 1, "Dim");
-            ui.selectable_value(&mut app.closed_group_style, 2, "Hide");
-        });
-        ui.checkbox(&mut app.highlight_hovered_group, "Highlight hovered group");
-        ui.add_space(10.0);
-
-        ui.label(
-            egui::RichText::new("Placement display")
-                .size(20.0)
-                .underline(),
-        );
-        egui::Grid::new("placement_options").show(ui, |ui| {
-            ui.label("Show");
-            ui.label("Pos");
-            ui.label("Edges");
-            ui.label("Bonus");
-            ui.label("Diff");
-            ui.label("Crowd");
-            ui.label("Ends");
-            ui.label("Groups");
-            ui.end_row();
-
-            let max_edges = app
-                .best_placements
-                .iter_usable()
-                .next()
-                .map(|(_, s)| s.matching_edges);
-            let mut clicked_row = None;
-            for (rank, score) in app.best_placements.iter_all() {
-                let is_best = max_edges == Some(score.matching_edges);
-                let color = if is_best {
-                    Color32::WHITE
-                } else {
-                    Color32::from_rgb(120, 120, 120)
-                };
-
-                ui.checkbox(&mut app.show_placements[rank], "");
-                let text = egui::RichText::new(format!("{}", score.pos)).color(color);
-                if ui.add(Label::new(text).sense(Sense::click())).clicked() {
-                    clicked_row = Some(score.pos);
+                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    app.submit_goto();
                 }
-                ui.label(egui::RichText::new(format!("{}", score.matching_edges)).color(color));
-                let bonus_color = if score.neighbor_bonus > 0 {
-                    Color32::from_rgb(80, 200, 80)
-                } else {
-                    color
-                };
-                ui.label(
-                    egui::RichText::new(format!("{}", score.neighbor_bonus)).color(bonus_color),
-                );
-                ui.label(
-                    egui::RichText::new(format!("{}", score.connection_difficulty)).color(color),
-                );
-                let crowd_color = if score.crowding > 0 {
-                    Color32::from_rgb(220, 80, 80)
-                } else {
-                    color
-                };
-                ui.label(egui::RichText::new(format!("{}", score.crowding)).color(crowd_color));
-                let end_color = if score.open_end_delta > 0 {
-                    Color32::from_rgb(220, 80, 80)
-                } else if score.open_end_delta < 0 {
-                    Color32::from_rgb(80, 200, 80)
-                } else {
-                    color
-                };
-                ui.label(
-                    egui::RichText::new(format!("{:+}", score.open_end_delta)).color(end_color),
-                );
-                let group_diffs = score
-                    .group_edge_alterations
-                    .iter()
-                    .map(|g| format!("{} => {}", g.group_size, g.diff))
-                    .collect::<Vec<_>>();
-                ui.label(egui::RichText::new(format!("{group_diffs:?}")).color(color));
+            });
+            ui.horizontal(|ui| {
+                let slider =
+                    egui::Slider::new(&mut app.inv_scale.target, 5.0..=500.0).text("Zoom out");
+                if ui.add(slider).changed() {
+                    app.inv_scale.set(app.inv_scale.target);
+                }
+                if ui.button("Zoom fit").clicked() {
+                    app.zoom_fit();
+                }
+            });
+            ui.add_space(10.0);
+
+            ui.label(egui::RichText::new("Overlays").size(20.0).underline());
+            ui.checkbox(show_tooltip, "Show tooltip");
+            ui.checkbox(show_groups, "Show quest labels");
+            ui.checkbox(show_biggest_groups, "Show biggest groups");
+            ui.checkbox(show_tile_frequencies, "Tile frequencies");
+            ui.add_space(10.0);
+
+            ui.label(egui::RichText::new("Section style").size(20.0).underline());
+            ui.selectable_value(&mut app.section_style, 0, "Color by terrain type");
+            ui.selectable_value(&mut app.section_style, 1, "Color by group statically");
+            ui.selectable_value(&mut app.section_style, 2, "Color by group dynamically");
+            ui.selectable_value(&mut app.section_style, 3, "Color by texture");
+            ui.add_space(10.0);
+
+            ui.label(
+                egui::RichText::new("Group display options")
+                    .size(20.0)
+                    .underline(),
+            );
+            ui.label("Closed groups");
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut app.closed_group_style, 0, "Show");
+                ui.selectable_value(&mut app.closed_group_style, 1, "Dim");
+                ui.selectable_value(&mut app.closed_group_style, 2, "Hide");
+            });
+            ui.checkbox(&mut app.highlight_hovered_group, "Highlight hovered group");
+            ui.add_space(10.0);
+
+            ui.label(
+                egui::RichText::new("Placement display")
+                    .size(20.0)
+                    .underline(),
+            );
+            egui::Grid::new("placement_options").show(ui, |ui| {
+                ui.label("Show");
+                ui.label("Pos");
+                ui.label("Score");
+                ui.label("Bonus");
+                ui.label("Crowd");
+                ui.label("Ends");
+                ui.label("Top3");
+                ui.label("Groups");
                 ui.end_row();
-            }
-            if let Some(pos) = clicked_row {
-                app.goto(pos);
-            }
-        });
-        ui.add_space(10.0);
+
+                let max_score = app
+                    .best_placements
+                    .iter_usable()
+                    .next()
+                    .map(|(_, s)| s.matching_edges as i16 - s.connection_difficulty as i16);
+                let mut clicked_row = None;
+                for (rank, score) in app.best_placements.iter_all() {
+                    if rank >= crate::best_placements::MAX_SHOWN_PLACEMENTS {
+                        break;
+                    }
+                    let is_best = max_score
+                        == Some(score.matching_edges as i16 - score.connection_difficulty as i16);
+                    let color = if is_best {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_rgb(120, 120, 120)
+                    };
+
+                    ui.checkbox(&mut app.show_placements[rank], "");
+                    let text = egui::RichText::new(format!("{}", score.pos)).color(color);
+                    if ui.add(Label::new(text).sense(Sense::click())).clicked() {
+                        clicked_row = Some(score.pos);
+                    }
+                    let score_text = if score.connection_difficulty > 0 {
+                        format!("{}-{}", score.matching_edges, score.connection_difficulty)
+                    } else {
+                        format!("{}", score.matching_edges)
+                    };
+                    ui.label(egui::RichText::new(score_text).color(color));
+                    let bonus_color = if score.neighbor_bonus > 0 {
+                        Color32::from_rgb(80, 200, 80)
+                    } else {
+                        color
+                    };
+                    ui.label(
+                        egui::RichText::new(format!("{}", score.neighbor_bonus)).color(bonus_color),
+                    );
+                    let crowd_color = if score.crowding > 0 {
+                        Color32::from_rgb(220, 80, 80)
+                    } else {
+                        color
+                    };
+                    ui.label(egui::RichText::new(format!("{}", score.crowding)).color(crowd_color));
+                    let end_color = if score.open_end_delta > 0 {
+                        Color32::from_rgb(220, 80, 80)
+                    } else if score.open_end_delta < 0 {
+                        Color32::from_rgb(80, 200, 80)
+                    } else {
+                        color
+                    };
+                    ui.label(
+                        egui::RichText::new(format!("{:+}", score.open_end_delta)).color(end_color),
+                    );
+                    // Top-3 group effects
+                    let top3_text = score
+                        .top_group_effects
+                        .iter()
+                        .map(|e| format!("{:?}#{}{:+}", e.terrain, e.rank, e.open_edge_delta))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if !top3_text.is_empty() {
+                        ui.label(egui::RichText::new(top3_text).color(color));
+                    } else {
+                        ui.label("");
+                    }
+                    let group_diffs = score
+                        .group_edge_alterations
+                        .iter()
+                        .map(|g| format!("{} => {}", g.group_size, g.diff))
+                        .collect::<Vec<_>>();
+                    ui.label(egui::RichText::new(format!("{group_diffs:?}")).color(color));
+                    ui.end_row();
+                }
+                if let Some(pos) = clicked_row {
+                    app.goto(pos);
+                }
+            });
+            ui.add_space(10.0);
+        }); // ScrollArea
     });
+}
+
+fn draw_mini_hex(ui: &mut egui::Ui, edges: &[Terrain; 6], size: f32) {
+    let (response, painter) =
+        ui.allocate_painter(egui::vec2(size * 2.0, size * 2.0), Sense::hover());
+    let center = response.rect.center();
+
+    let hex_vertices: Vec<Pos2> = (0..6)
+        .map(|i| {
+            let angle = std::f32::consts::FRAC_PI_3 * i as f32 - std::f32::consts::FRAC_PI_2;
+            Pos2::new(center.x + size * angle.cos(), center.y + size * angle.sin())
+        })
+        .collect();
+
+    for side in 0..6 {
+        let color = terrain_color(edges[side]);
+        let v0 = hex_vertices[(side + 5) % 6];
+        let v1 = hex_vertices[side % 6];
+        painter.add(egui::Shape::convex_polygon(
+            vec![center, v0, v1],
+            color,
+            egui::Stroke::new(1.0, Color32::from_rgb(40, 40, 40)),
+        ));
+    }
+
+    let mut outline = hex_vertices;
+    outline.push(outline[0]);
+    painter.add(egui::Shape::line(
+        outline,
+        egui::Stroke::new(1.5, Color32::from_rgb(40, 40, 40)),
+    ));
+}
+
+fn render_tile_frequencies(app: &App, ctx: &egui::Context, open: &mut bool) {
+    if !*open {
+        return;
+    }
+    egui::Window::new("Tile Frequencies")
+        .open(open)
+        .default_width(500.0)
+        .default_height(600.0)
+        .vscroll(true)
+        .show(ctx, |ui| {
+            let freqs = &app.tile_frequencies;
+            ui.label(format!(
+                "Total: {} tiles, {} distinct patterns",
+                freqs.total_tiles,
+                freqs.entries.len()
+            ));
+            ui.add_space(5.0);
+
+            let hex_size = 20.0;
+            egui::Grid::new("tile_freq_grid")
+                .min_col_width(hex_size * 2.0 + 4.0)
+                .show(ui, |ui| {
+                    ui.label("");
+                    ui.label("Count");
+                    ui.label("%");
+                    ui.end_row();
+
+                    for entry in &freqs.entries {
+                        draw_mini_hex(ui, &entry.edges.0, hex_size);
+                        ui.label(format!("{}", entry.count));
+                        ui.label(format!("{:.1}%", entry.fraction * 100.0));
+                        ui.end_row();
+                    }
+                });
+        });
 }
 
 fn render_tooltip(app: &App, ctx: &egui::Context, show_tooltip: &mut bool) {
@@ -386,54 +477,65 @@ fn render_biggest_groups(app: &App, ctx: &egui::Context, visible_rect: egui::Rec
     }
 
     use std::collections::HashMap;
-    // Find the biggest group (by segment count) for each terrain type.
-    let mut biggest: HashMap<Terrain, (usize, &crate::group::Group)> = HashMap::new();
+    // Collect top 3 biggest open groups per terrain type.
+    let mut top3: HashMap<Terrain, Vec<(usize, &crate::group::Group)>> = HashMap::new();
     for (idx, group) in app.group_assignments.groups.iter().enumerate() {
         if group.is_closed() {
             continue;
         }
-        let size = group.segment_indices.len();
-        let entry = biggest.entry(group.terrain).or_insert((idx, group));
-        if size > entry.1.segment_indices.len() {
-            *entry = (idx, group);
-        }
+        let list = top3.entry(group.terrain).or_default();
+        list.push((idx, group));
+        list.sort_by(|a, b| b.1.unit_count.cmp(&a.1.unit_count));
+        list.truncate(3);
     }
 
-    for (terrain, (group_idx, group)) in &biggest {
-        let centroid_hex = glam::IVec2::new(
-            group.centroid.x.round() as i32,
-            group.centroid.y.round() as i32,
-        );
-        let centroid = app.hex_to_pixel(centroid_hex);
+    let rank_colors = [
+        Color32::from_rgb(255, 215, 0),   // gold
+        Color32::from_rgb(192, 192, 192), // silver
+        Color32::from_rgb(205, 127, 50),  // bronze
+    ];
 
-        let margin = 50.0;
-        if centroid.x < visible_rect.min.x - margin
-            || centroid.y < visible_rect.min.y - margin
-            || centroid.x > visible_rect.max.x + margin
-            || centroid.y > visible_rect.max.y + margin
-        {
-            continue;
+    for (terrain, groups) in &top3 {
+        for (rank, (group_idx, group)) in groups.iter().enumerate() {
+            let centroid_hex = glam::IVec2::new(
+                group.centroid.x.round() as i32,
+                group.centroid.y.round() as i32,
+            );
+            let centroid = app.hex_to_pixel(centroid_hex);
+
+            let margin = 50.0;
+            if centroid.x < visible_rect.min.x - margin
+                || centroid.y < visible_rect.min.y - margin
+                || centroid.x > visible_rect.max.x + margin
+                || centroid.y > visible_rect.max.y + margin
+            {
+                continue;
+            }
+
+            let tiles = group.segment_indices.len();
+            let text = if matches!(terrain, Terrain::Rail | Terrain::River) {
+                format!("{terrain:?} {tiles}")
+            } else {
+                format!("{terrain:?} {} ({tiles})", group.unit_count)
+            };
+
+            let id = egui::Id::new(("biggest_group", *group_idx));
+            egui::Area::new(id)
+                .order(egui::Order::Background)
+                .fixed_pos(Pos2::new(centroid.x, centroid.y))
+                .interactable(false)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style())
+                        .fill(Color32::from_black_alpha(120))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(text)
+                                    .color(rank_colors[rank])
+                                    .size(13.0),
+                            );
+                        });
+                });
         }
-
-        let size = group.segment_indices.len();
-        let text = format!("{terrain:?}: {size} segments, {} units", group.unit_count);
-
-        let id = egui::Id::new(("biggest_group", *group_idx));
-        egui::Area::new(id)
-            .order(egui::Order::Background)
-            .fixed_pos(Pos2::new(centroid.x, centroid.y))
-            .interactable(false)
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style())
-                    .fill(Color32::from_black_alpha(200))
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(text)
-                                .color(Color32::from_rgb(255, 215, 0))
-                                .size(13.0),
-                        );
-                    });
-            });
     }
 }
 
@@ -454,6 +556,7 @@ pub fn render_ui(
     show_tooltip: &mut bool,
     show_groups: &mut bool,
     show_biggest_groups: &mut bool,
+    show_tile_frequencies: &mut bool,
 ) {
     render_top_panel(app, ctx, sidebar_expanded);
     render_side_panel(
@@ -463,6 +566,7 @@ pub fn render_ui(
         show_tooltip,
         show_groups,
         show_biggest_groups,
+        show_tile_frequencies,
     );
     // Available rect after panels have claimed their space.
     let visible_rect = ctx.available_rect();
@@ -480,6 +584,7 @@ pub fn render_ui(
     if *show_biggest_groups {
         render_biggest_groups(app, ctx, visible_rect);
     }
+    render_tile_frequencies(app, ctx, show_tile_frequencies);
     render_map_loader(app, ctx);
     render_next_tile(app, ctx);
 }

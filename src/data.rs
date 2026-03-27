@@ -9,7 +9,7 @@ pub const INT_: usize = 4;
 pub const IVEC2_: usize = 2 * INT_;
 pub const IVEC4_: usize = 4 * INT_;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Form {
     Size1 = 0,
     Size2 = 1,
@@ -128,7 +128,7 @@ pub enum EdgeMatch {
     Missing,
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Hash, PartialOrd, Ord)]
 pub enum Terrain {
     Missing = 0,
     Empty = 1,
@@ -436,11 +436,17 @@ fn water_tile_segments(id: i32) -> Option<Vec<SegmentDef>> {
         ],
         // 2CW (Normal, Boat, Beaver)
         47 | 54 | 58 => vec![(Form::Straight, Terrain::River, 0, 1)],
-        // 2CW_2AA_1AV (Normal, Watermill)
-        49 | 50 => vec![
+        // 2CW_2AA_1AV (Normal)
+        49 => vec![
             (Form::Straight, Terrain::River, 0, 1),
             (Form::Size2, Terrain::Wheat, 1, 1),
             (Form::Size1, Terrain::House, 5, 1),
+        ],
+        // 2CW_2AA_2AV (Watermill)
+        50 => vec![
+            (Form::Straight, Terrain::River, 0, 1),
+            (Form::Size2, Terrain::Wheat, 1, 1),
+            (Form::Size2, Terrain::House, 4, 2),
         ],
         // 2CW_2AF_1AA (Normal, Watermill)
         51 | 52 => vec![

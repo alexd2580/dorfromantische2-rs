@@ -19,12 +19,13 @@ use crate::{
     map::{Map, SegmentIndex},
     opencv, raw_data, shader,
     textures::Textures,
+    tile_frequency,
 };
 
 const MIN_ZOOM: f32 = 5.0;
 const MAX_ZOOM: f32 = 500.0;
 const DEFAULT_ZOOM: f32 = 20.0;
-const GOTO_ZOOM: f32 = 30.0;
+const GOTO_ZOOM: f32 = 60.0;
 #[allow(dead_code)]
 const INITIAL_SHOWN_PLACEMENTS: usize = 5;
 
@@ -156,6 +157,7 @@ pub struct App {
     pub group_assignments: GroupAssignments,
     pub best_placements: BestPlacements,
     pub show_placements: [bool; MAX_SHOWN_PLACEMENTS],
+    pub tile_frequencies: tile_frequency::TileFrequencies,
 
     // Gpu resources.
     /// Set of textures.
@@ -335,6 +337,7 @@ impl App {
             group_assignments: GroupAssignments::default(),
             best_placements: BestPlacements::default(),
             show_placements: Default::default(),
+            tile_frequencies: tile_frequency::TileFrequencies::default(),
         };
 
         let size = window.inner_size();
@@ -430,7 +433,7 @@ impl App {
 
     pub fn on_scroll(&mut self, y: f32) {
         self.inv_scale
-            .set(MIN_ZOOM.max(*self.inv_scale - y).min(MAX_ZOOM));
+            .set(MIN_ZOOM.max(*self.inv_scale - y * 5.0).min(MAX_ZOOM));
     }
 
     #[allow(clippy::cast_ptr_alignment, clippy::similar_names)]
@@ -527,12 +530,23 @@ impl App {
 
     fn handle_map_loader(&mut self, gpu: &Gpu) {
         if let Some((map, groups, best_placements)) = self.map_loader.take_result() {
+            self.tile_frequencies = tile_frequency::TileFrequencies::from_map(&map);
             self.map = map;
             self.group_assignments = groups;
             self.best_placements = best_placements;
             self.show_placements = [false; MAX_SHOWN_PLACEMENTS];
-            for (rank, _) in self.best_placements.iter_usable() {
-                self.show_placements[rank] = true;
+            for (rank, score) in self.best_placements.iter_all() {
+                if rank >= MAX_SHOWN_PLACEMENTS {
+                    break;
+                }
+                // Pre-select top-scoring placements and those affecting top-3 groups.
+                let is_usable = self
+                    .best_placements
+                    .iter_usable()
+                    .any(|(_, s)| s.pos == score.pos);
+                if is_usable || !score.top_group_effects.is_empty() {
+                    self.show_placements[rank] = true;
+                }
             }
             self.zoom_fit();
 

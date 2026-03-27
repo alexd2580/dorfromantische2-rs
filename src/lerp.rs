@@ -44,11 +44,12 @@ impl<T: Lerp + Copy> Interpolated<T> {
     }
 
     fn smoothstep(x: f32) -> f32 {
-        -2.0 * x.powi(3) + 3.0 * x.powi(2)
+        // Smoother hermite (Ken Perlin's smootherstep): 6x^5 - 15x^4 + 10x^3
+        6.0 * x.powi(5) - 15.0 * x.powi(4) + 10.0 * x.powi(3)
     }
 
     pub fn tick(&mut self) {
-        self.mix = 1f32.min(self.mix + 1.0 / 60.0);
+        self.mix = 1f32.min(self.mix + 1.0 / 90.0);
         self.value = Lerp::lerp(self.source, self.target, Self::smoothstep(self.mix));
     }
 

@@ -944,6 +944,23 @@ fn dump_active_challenges_structure() {
 // (test_full_pipeline_*) which load real save files containing quest tiles.
 
 #[test]
+fn dump_last_tile() {
+    let sg = load_biggame();
+    let last = sg.tiles.last().unwrap();
+    println!(
+        "Last tile: pos=({}, {}), rotation={}, special_tile_id={:?}",
+        last.s, last.t, last.rotation, last.special_tile_id
+    );
+    println!("  segments: {:?}", last.segments);
+    if let Some(qt) = &last.quest_tile {
+        println!(
+            "  quest: tile_id={}, target={}, active={}, quest_id={}",
+            qt.quest_tile_id.0, qt.target_value, qt.quest_active, qt.quest_id.0
+        );
+    }
+}
+
+#[test]
 fn print_biggame_quests() {
     let save = load_biggame();
     let map = Map::from(&save);

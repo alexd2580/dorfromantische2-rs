@@ -15,7 +15,18 @@ pub struct GroupEdgeAlteration {
     pub diff: i8,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+/// Effect on a top-3 group's open edges from a placement.
+#[derive(Debug, Clone)]
+pub struct TopGroupEffect {
+    pub terrain: Terrain,
+    /// 1 = largest, 2 = second, 3 = third.
+    pub rank: u8,
+    /// Change in open edges for this group.
+    pub open_edge_delta: i8,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
 pub struct PlacementScore {
     pub pos: Pos,
     pub rotation: Rotation,
@@ -28,14 +39,15 @@ pub struct PlacementScore {
     pub crowding: u8,
     /// Net change in group open ends: new open ends created minus existing ones closed.
     pub open_end_delta: i8,
+    /// Effects on top-3 groups' open edges.
+    pub top_group_effects: Vec<TopGroupEffect>,
     pub group_edge_alterations: Vec<GroupEdgeAlteration>,
 }
 
 impl PlacementScore {
     fn to_orderable(&self) -> impl Ord {
         (
-            self.matching_edges,
-            std::cmp::Reverse(self.connection_difficulty),
+            self.matching_edges as i16 - self.connection_difficulty as i16,
             std::cmp::Reverse(self.crowding),
             std::cmp::Reverse(self.open_end_delta),
             self.neighbor_bonus,
@@ -46,6 +58,14 @@ impl PlacementScore {
         )
     }
 }
+
+impl PartialEq for PlacementScore {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_orderable() == other.to_orderable()
+    }
+}
+
+impl Eq for PlacementScore {}
 
 impl Ord for PlacementScore {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -377,6 +397,7 @@ impl BestPlacements {
             crowding,
             open_end_delta,
             neighbor_bonus,
+            top_group_effects: Vec::new(),
             group_edge_alterations: Vec::new(),
         })
     }
@@ -395,25 +416,123 @@ impl BestPlacements {
             .enumerate()
     }
 
-    pub fn iter_all(&self) -> impl Iterator<Item = (usize, &PlacementScore)> {
-        self.best_placements
+    pub fn iter_all(&self) -> Vec<(usize, &PlacementScore)> {
+        // Collect top N by score.
+        let mut result: Vec<&PlacementScore> = self
+            .best_placements
             .iter()
             .rev()
             .take(MAX_SHOWN_PLACEMENTS)
-            .enumerate()
+            .collect();
+
+        // Add any with top_group_effects that aren't already included.
+        for score in &self.best_placements {
+            if !score.top_group_effects.is_empty()
+                && !result.iter().any(|s| std::ptr::eq(*s, score))
+            {
+                result.push(score);
+            }
+        }
+
+        // Re-sort descending by orderable.
+        result.sort_by(|a, b| b.cmp(a));
+        result.into_iter().enumerate().collect()
     }
+}
+
+/// A top-3 group entry for a terrain, with its rank and group index.
+struct TopGroup {
+    terrain: Terrain,
+    rank: u8,
+    group_idx: GroupIndex,
+}
+
+/// Compute effects on top-3 groups from placing next tile at `pos` with `rotation`.
+fn top_group_effects(
+    map: &Map,
+    groups: &GroupAssignments,
+    top_groups: &[TopGroup],
+    pos: Pos,
+    rotation: Rotation,
+) -> Vec<TopGroupEffect> {
+    let mut effects = Vec::new();
+    for tg in top_groups {
+        let group = &groups.groups[tg.group_idx];
+        if !group.open_edges.contains(&pos) {
+            continue;
+        }
+        // This placement fills an open edge of this group.
+        // -1 for closing this position as an open edge.
+        let mut delta: i8 = -1;
+        // Check if our tile creates new open edges for this group:
+        // for each empty neighbor of pos, if our tile has a segment with matching
+        // terrain pointing that way, it extends the group and creates a new open edge.
+        let group_terrain = tg.terrain;
+        for side in 0..HEX_SIDES {
+            let neighbor_pos = Map::neighbor_pos_of(pos, side);
+            let neighbor_occupied = map
+                .tile_key(neighbor_pos)
+                .and_then(|key| map.rendered_tiles[key])
+                .is_some();
+            if neighbor_occupied {
+                continue;
+            }
+            let my_terrain = map
+                .next_tile
+                .iter()
+                .find(|seg| seg.contains_rotation((side + HEX_SIDES - rotation) % HEX_SIDES))
+                .map(|s| s.terrain);
+            if my_terrain.is_some_and(|t| t.extends_group_of(group_terrain)) {
+                delta += 1;
+            }
+        }
+        effects.push(TopGroupEffect {
+            terrain: tg.terrain,
+            rank: tg.rank,
+            open_edge_delta: delta,
+        });
+    }
+    effects
 }
 
 impl From<(&Map, &GroupAssignments)> for BestPlacements {
     fn from(data: (&Map, &GroupAssignments)) -> Self {
         let map = data.0;
         let groups = data.1;
+
+        // Pre-compute top-3 open groups per terrain by unit count.
+        use std::collections::HashMap;
+        let mut per_terrain: HashMap<Terrain, Vec<(usize, u32)>> = HashMap::new();
+        for (idx, group) in groups.groups.iter().enumerate() {
+            if group.is_closed() {
+                continue;
+            }
+            per_terrain
+                .entry(group.terrain)
+                .or_default()
+                .push((idx, group.unit_count));
+        }
+        let mut top_groups = Vec::new();
+        for (terrain, mut entries) in per_terrain {
+            entries.sort_by(|a, b| b.1.cmp(&a.1));
+            for (rank, (group_idx, _)) in entries.iter().take(3).enumerate() {
+                top_groups.push(TopGroup {
+                    terrain,
+                    rank: rank as u8 + 1,
+                    group_idx: *group_idx,
+                });
+            }
+        }
+
         let mut best_placements = BTreeSet::default();
 
         for pos in &groups.possible_placements {
             let best_rotation = (0..HEX_SIDES)
                 .filter_map(|rotation| {
-                    BestPlacements::score_of_next_at(map, groups, *pos, rotation)
+                    let mut score = BestPlacements::score_of_next_at(map, groups, *pos, rotation)?;
+                    score.top_group_effects =
+                        top_group_effects(map, groups, &top_groups, *pos, rotation);
+                    Some(score)
                 })
                 .max();
             if let Some(score) = best_rotation {
