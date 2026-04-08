@@ -33,6 +33,7 @@
 #define COLOR_BY_GROUP_STATIC 1
 #define COLOR_BY_GROUP_DYNAMIC 2
 #define COLOR_BY_TEXTURE 3
+#define COLOR_BY_RAIL_RIVER 4
 
 #define CLOSED_GROUPS_SHOW 0
 #define CLOSED_GROUPS_DIM 1
@@ -110,6 +111,15 @@ layout(std140, binding=0) uniform View {
 
     int highlight_hovered_group;
     uint show_placements;
+
+    ivec2 ghost_pos;
+    int ghost_rotation;
+    int ghost_active;
+
+    ivec2 _pad_align;
+    uvec4 ghost_segments_4;
+    uvec2 ghost_segments_2;
+    ivec2 _pad2;
 };
 
 layout(std140, binding=1) readonly buffer Tiles {
@@ -193,21 +203,21 @@ vec3 color_of_group(uint group, float offset) {
 vec3 color_of_terrain(uint terrain) {
     switch (terrain) {
     case TERRAIN_EMPTY:
-        return vec3(0.2);
+        return pow(vec3(0x32, 0x32, 0x32) / 255.0, vec3(2.2));
     case TERRAIN_VILLAGE:
-        return vec3(0.7, 0.4, 0.4);
+        return pow(vec3(0xFF, 0x7A, 0x2F) / 255.0, vec3(2.2));
     case TERRAIN_FOREST:
-        return vec3(0.5, 0.3, 0.2);
+        return pow(vec3(0x59, 0x40, 0x24) / 255.0, vec3(2.2));
     case TERRAIN_FIELD:
-        return vec3(1, 1, 0);
+        return pow(vec3(0xFF, 0xF2, 0x26) / 255.0, vec3(2.2));
     case TERRAIN_RAIL:
-        return vec3(0.8);
+        return pow(vec3(0xB0, 0xB5, 0xBD) / 255.0, vec3(2.2));
     case TERRAIN_RIVER:
-        return vec3(0, 0, 1);
+        return pow(vec3(0x1A, 0x80, 0xE6) / 255.0, vec3(2.2));
     case TERRAIN_LAKE:
-        return vec3(0.2, 0.2, 1);
+        return pow(vec3(0x1A, 0x56, 0xC9) / 255.0, vec3(2.2));
     case TERRAIN_STATION:
-        return vec3(0.5, 0.5, 1);
+        return pow(vec3(0xB0, 0xB5, 0xBD) / 255.0, vec3(2.2));
     default:
         return vec3(1, 0, 1);
     }
@@ -243,18 +253,7 @@ const float single_outer = 1.15 * 1.15;
 const float double_inner = 0.85 * 0.85;
 const float triple_inner = 1.85 * 1.85;
 
-/**
- * `pos` is relative to the time center, without rotation.
- * The edges of the hex are 1 in length, and offset by `COS_30`
- * from the tile center.
- * x points right, y points up.
- */
 bool is_within_form(vec2 pos, uint form) {
-    // if (pos.y > abs(pos.x * 2 * cos_30)) {
-    //     return true;
-    // }
-    // return false;
-
     bool vertex = sqr_dist_of(abs(pos), vec2(1, 0)) > vertex_inner && sqr_dist_of(abs(pos), vec2(0.5, COS_30)) > vertex_inner;
 
     switch (form) {
@@ -262,7 +261,6 @@ bool is_within_form(vec2 pos, uint form) {
             return sqr_dist_of(pos, vec2(0, COS_30)) < single_inner;
         case FORM_SIZE2:
             return vertex && sqr_dist_of(pos, vec2(0.5, COS_30)) < double_inner;
-            return pos.y > 0 && pos.y > (-pos.x * 2 * COS_30);
         case FORM_BRIDGE: {
             float sqr_dist = sqr_dist_of(pos, vec2(1.5, COS_30));
             return within(single_outer, sqr_dist, triple_inner);
@@ -302,10 +300,6 @@ bool is_within_form(vec2 pos, uint form) {
         case FORM_SIZE6:
             return vertex;
 
-        case FORM_UNKNOWN_102:
-        case FORM_UNKNOWN_105:
-        case FORM_WATER_SIZE4:
-        case FORM_UNKNOWN_111:
         default:
             return false;
     }
@@ -345,11 +339,13 @@ float group_color_factor(bool is_closed) {
 
 void main() {
     vec2 coords = origin + vec2(uv.s * aspect_ratio, uv.t) * 0.5 * inv_scale;
+
     ivec2 st = grid_coords_at(coords);
 
     // Load tile info.
     uint tile_id = tile_id_at(st);
-    // Tile is outside range. It's empty there.
+    vec3 empty_color = color_of_terrain(TERRAIN_EMPTY);
+    // Tile is outside range.
     if (tile_id == (uint(1) << 31)) {
         frag_data = vec4(0, 0, 0, 1);
         return;
@@ -360,14 +356,7 @@ void main() {
     vec2 center = center_coords_of(st);
     vec2 offset = coords - center;
 
-    bool close_to_x_border = dot(abs(offset), vec2(COS_30, SIN_30)) > 0.95 * COS_30;
-    bool close_to_y_border = abs(offset.y) > 0.95 * COS_30;
-    if (close_to_x_border || close_to_y_border) {
-        frag_data = vec4(0, 0, 0, 1);
-        return;
-    }
-
-    vec3 color = vec3(0.2);
+    vec3 color = empty_color;
     for (uint segment_id = 0; segment_id < 6; segment_id++) {
         Segment segment = inflate_segment(unpack_segment(tile, segment_id));
 
@@ -404,10 +393,18 @@ void main() {
             case COLOR_BY_TEXTURE:
                 color = color_of_texture(segment.terrain, -0.1 * coords);
                 break;
+            case COLOR_BY_RAIL_RIVER:
+                if (segment.terrain == TERRAIN_RAIL || segment.terrain == TERRAIN_RIVER
+                    || segment.terrain == TERRAIN_LAKE || segment.terrain == TERRAIN_STATION) {
+                    color = color_of_terrain(segment.terrain);
+                } else {
+                    color = empty_color;
+                }
+                break;
             }
 
             if (closed_group_style == CLOSED_GROUPS_HIDE && segment.group_is_closed) {
-                color = vec3(0.2);
+                color = empty_color;
                 break;
             }
 
@@ -426,6 +423,31 @@ void main() {
             break;
         }
     }
-    // frag_data = vec4(color * (0.5 * sin(time) + 0.5), 1);
+    // Ghost tile: render the next tile at the ghost position with pulsing opacity.
+    if (ghost_active != 0 && st == ghost_pos) {
+        vec3 ghost_color = empty_color;
+        for (uint gi = 0; gi < 6; gi++) {
+            uint gs;
+            if (gi < 4) {
+                gs = ghost_segments_4[gi];
+            } else {
+                gs = ghost_segments_2[gi - 4];
+            }
+            Segment gseg = inflate_segment(gs);
+            if (gseg.terrain == TERRAIN_MISSING || gseg.terrain == TERRAIN_EMPTY) break;
+
+            float angle = gseg.rotation * 2 * DEG_30;
+            float c = cos(angle);
+            float s = sin(angle);
+            vec2 gpos = vec2(c * offset.x - s * offset.y, s * offset.x + c * offset.y);
+            if (is_within_form(gpos, gseg.form)) {
+                ghost_color = color_of_terrain(gseg.terrain);
+                break;
+            }
+        }
+        float pulse = 0.5 + 0.2 * sin(time * 4.0);
+        color = mix(empty_color, ghost_color, pulse);
+    }
+
     frag_data = vec4(color, 1);
 }

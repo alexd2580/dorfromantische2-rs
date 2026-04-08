@@ -15,7 +15,12 @@ pub struct Textures {
 
 impl Textures {
     fn load_texture(path: &str, gpu: &Gpu) -> wgpu::Texture {
-        let image = image::io::Reader::open(path).unwrap().decode().unwrap();
+        let mut full_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        full_path.push(path);
+        let image = image::io::Reader::open(&full_path)
+            .unwrap_or_else(|e| panic!("Failed to open texture {}: {e}", full_path.display()))
+            .decode()
+            .unwrap();
         let image = image.to_rgba8();
         gpu.upload_texture(path, &image)
     }

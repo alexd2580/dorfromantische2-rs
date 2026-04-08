@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use glam::Vec2;
 
 use crate::{
-    data::{Pos, Segment},
+    data::{GroupKind, Pos, Segment},
     map::{Quest, SegmentIndex},
 };
 
@@ -11,6 +11,9 @@ use crate::{
 pub type GroupIndex = usize;
 
 pub struct Group {
+    #[allow(dead_code)]
+    pub kind: GroupKind,
+    /// Kept for backward compatibility with shader/render code.
     pub terrain: crate::data::Terrain,
     pub segment_indices: HashSet<SegmentIndex>,
     pub open_edges: HashSet<Pos>,
@@ -20,6 +23,8 @@ pub struct Group {
     pub unit_count: u32,
     /// Centroid of unique tile positions in this group (in hex coordinates as f32).
     pub centroid: Vec2,
+    /// Max distance from centroid to any tile position (in hex coordinates).
+    pub radius: f32,
 }
 
 impl Group {
@@ -27,18 +32,29 @@ impl Group {
         self.open_edges.is_empty()
     }
 
-    /// Compute the centroid of unique tile positions in the group (in hex coordinates).
+    /// Compute the centroid of unique tile positions in the group (in world coordinates).
     pub fn compute_centroid(segment_indices: &HashSet<SegmentIndex>, segments: &[Segment]) -> Vec2 {
         let mut positions = HashSet::new();
         for &i in segment_indices {
             positions.insert(segments[i].pos);
         }
         let count = positions.len() as f32;
-        let sum: Vec2 = positions
-            .iter()
-            .map(|p| Vec2::new(p.x as f32, p.y as f32))
-            .sum();
+        let sum: Vec2 = positions.iter().map(|p| crate::hex::hex_to_world(*p)).sum();
         sum / count
+    }
+
+    /// Compute max distance from centroid to any tile in the group (in world coordinates).
+    pub fn compute_radius(
+        centroid: Vec2,
+        segment_indices: &HashSet<SegmentIndex>,
+        segments: &[Segment],
+    ) -> f32 {
+        let mut max_dist_sq: f32 = 0.0;
+        for &i in segment_indices {
+            let p = crate::hex::hex_to_world(segments[i].pos);
+            max_dist_sq = max_dist_sq.max(p.distance_squared(centroid));
+        }
+        max_dist_sq.sqrt() + 1.5 // +1.5 to cover the tile itself (hex radius in world coords)
     }
 
     /// Compute total units from the group's segments.

@@ -53,8 +53,9 @@ fn bench_best_placements(c: &mut Criterion) {
     let savegame = SaveGame::try_from(&value).unwrap();
     let map = Map::from(&savegame);
     let groups = GroupAssignments::from(&map);
-    c.bench_function("BestPlacements::from (biggame)", |b| {
-        b.iter(|| BestPlacements::from(black_box((&map, &groups))))
+    let freqs = dorfromantische2_rs::tile_frequency::TileFrequencies::from_map(&map);
+    c.bench_function("BestPlacements::compute (biggame)", |b| {
+        b.iter(|| BestPlacements::compute(black_box(&map), black_box(&groups), black_box(&freqs)))
     });
 }
 
@@ -66,7 +67,8 @@ fn bench_full_pipeline(c: &mut Criterion) {
             let savegame = SaveGame::try_from(&value).unwrap();
             let map = Map::from(&savegame);
             let groups = GroupAssignments::from(&map);
-            let _placements = BestPlacements::from((&map, &groups));
+            let freqs = dorfromantische2_rs::tile_frequency::TileFrequencies::from_map(&map);
+            let _placements = BestPlacements::compute(&map, &groups, &freqs);
         })
     });
 }

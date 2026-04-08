@@ -26,6 +26,8 @@ pub enum QuestType {
     MoreThan,
     /// Group must have exactly target_value units.
     Exact,
+    /// Flag quest: close the group (0 open edges).
+    Flag,
     /// Unknown quest type (quest_id not recognized).
     Unknown,
 }
@@ -35,8 +37,8 @@ impl QuestType {
     /// Pattern: base ID = more than, base+1 = exact.
     fn from_quest_id(quest_id: i32) -> Self {
         match quest_id {
-            // Wheat
-            1 => QuestType::Unknown, // TODO: determine type
+            // Flag quest (close the group).
+            1 => QuestType::Flag,
             30 => QuestType::MoreThan,
             31 => QuestType::Exact,
             // House
@@ -60,6 +62,7 @@ impl QuestType {
         match self {
             QuestType::MoreThan => ">=",
             QuestType::Exact => "==",
+            QuestType::Flag => "flag",
             QuestType::Unknown => "??",
         }
     }
@@ -97,6 +100,7 @@ pub struct Map {
     pub index_offset: Pos,
     /// Defines the extents of the index structure.
     pub index_size: IVec2,
+    #[allow(dead_code)]
     pub world_y_extents: IVec2,
 
     /// Maps a tile position key to a set of segment indices.
@@ -110,6 +114,7 @@ pub struct Map {
 
     /// The next tile is also represented by a set of segments.
     pub next_tile: Vec<Segment>,
+    #[allow(dead_code)]
     pub rendered_next_tile: [Terrain; HEX_SIDES],
     /// Quest attached to the next tile (if any).
     pub next_tile_quest: Option<Quest>,
@@ -361,18 +366,10 @@ impl Map {
 
     /// The rotation pointing in the opposite direction.
     pub fn opposite_side(rotation: Rotation) -> Rotation {
-        (rotation + HEX_SIDES / 2) % HEX_SIDES
+        crate::hex::opposite_side(rotation)
     }
 
     pub fn neighbor_pos_of(pos: Pos, rotation: Rotation) -> Pos {
-        pos + match rotation {
-            0 => Pos::new(0, 1),
-            1 => Pos::new(1, 0),
-            2 => Pos::new(1, -1),
-            3 => Pos::new(0, -1),
-            4 => Pos::new(-1, 0),
-            5 => Pos::new(-1, 1),
-            _ => panic!("Rotation should be 0..{HEX_SIDES}, got {rotation}"),
-        }
+        crate::hex::neighbor_pos_of(pos, rotation)
     }
 }

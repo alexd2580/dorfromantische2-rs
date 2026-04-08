@@ -1,7 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 
 use crate::{
-    data::{Pos, Terrain, HEX_SIDES},
+    data::{GroupKind, Pos, Terrain, HEX_SIDES},
     group::{Group, GroupIndex},
     map::{Map, SegmentIndex},
 };
@@ -16,7 +16,7 @@ pub struct GroupAnalyzer<'a> {
     discovered_pos: HashSet<Pos>,
 
     segment_queue: Vec<SegmentIndex>,
-    discovered_segments: HashSet<(SegmentIndex, Terrain)>,
+    discovered_segments: HashSet<(SegmentIndex, GroupKind)>,
 
     pub possible_placements: HashSet<Pos>,
     pub groups: Vec<Group>,
@@ -44,22 +44,15 @@ impl<'a> GroupAnalyzer<'a> {
     }
 
     fn discover_groups_of_segment(&mut self, segment_index: SegmentIndex) {
-        match self.map.segment(segment_index).terrain {
-            Terrain::Lake => self.discover_group(segment_index, Terrain::River),
-            Terrain::Station => {
-                self.discover_group(segment_index, Terrain::River);
-                self.discover_group(segment_index, Terrain::Rail);
-            }
-            a => self.discover_group(segment_index, a),
+        let terrain = self.map.segment(segment_index).terrain;
+        for &kind in GroupKind::memberships_of(terrain) {
+            self.discover_group(segment_index, kind);
         }
     }
 
-    fn discover_group(&mut self, segment_index: SegmentIndex, group_terrain: Terrain) {
+    fn discover_group(&mut self, segment_index: SegmentIndex, kind: GroupKind) {
         // Ignore if already processed.
-        if self
-            .discovered_segments
-            .contains(&(segment_index, group_terrain))
-        {
+        if self.discovered_segments.contains(&(segment_index, kind)) {
             return;
         }
 
@@ -72,17 +65,16 @@ impl<'a> GroupAnalyzer<'a> {
 
         // Start the flood fill from the initial segment.
         self.segment_queue.push(segment_index);
-        self.discovered_segments
-            .insert((segment_index, group_terrain));
+        self.discovered_segments.insert((segment_index, kind));
         while let Some(segment_index) = self.segment_queue.pop() {
             segment_indices.insert(segment_index);
 
             let segment = self.map.segment(segment_index);
 
-            // Check if this tile has a quest matching the group terrain.
+            // Check if this tile has a quest matching the group kind.
             if checked_quest_positions.insert(segment.pos) {
                 if let Some(quest) = self.map.quests.get(&segment.pos) {
-                    if quest.terrain.extends_group_of(group_terrain) {
+                    if kind.accepts(quest.terrain) {
                         quests.push(quest.clone());
                     }
                 }
@@ -109,29 +101,40 @@ impl<'a> GroupAnalyzer<'a> {
                     .segment_indices_at(neighbor_pos)
                     .unwrap()
                     .for_each(|index| {
-                        if self.discovered_segments.contains(&(index, group_terrain)) {
+                        if self.discovered_segments.contains(&(index, kind)) {
                             return;
                         }
                         let neighbor = self.map.segment(index);
 
                         if neighbor.contains_rotation(back_rotation)
-                            && neighbor.terrain.extends_group_of(group_terrain)
+                            && kind.accepts(neighbor.terrain)
                         {
-                            self.discovered_segments.insert((index, group_terrain));
+                            self.discovered_segments.insert((index, kind));
                             self.segment_queue.push(index);
                         }
                     });
             }
         }
+        // Derive a representative Terrain for backward compat (shader/render).
+        let group_terrain = match kind {
+            GroupKind::House => Terrain::House,
+            GroupKind::Forest => Terrain::Forest,
+            GroupKind::Wheat => Terrain::Wheat,
+            GroupKind::Rail => Terrain::Rail,
+            GroupKind::River => Terrain::River,
+        };
         let unit_count = Group::compute_unit_count(&segment_indices, &self.map.segments);
         let centroid = Group::compute_centroid(&segment_indices, &self.map.segments);
+        let radius = Group::compute_radius(centroid, &segment_indices, &self.map.segments);
         self.groups.push(Group {
+            kind,
             terrain: group_terrain,
             segment_indices,
             open_edges,
             quests,
             unit_count,
             centroid,
+            radius,
         });
     }
 
@@ -164,9 +167,14 @@ impl<'a> GroupAnalyzer<'a> {
 
         self.assigned_groups
             .resize(self.discovered_segments.len(), usize::MAX);
+        // For segments in multiple groups (stations), prefer the open group
+        // so they don't get hidden when only one group is closed.
         for (group_index, group) in self.groups.iter().enumerate() {
             for segment_index in &group.segment_indices {
-                self.assigned_groups[*segment_index] = group_index;
+                let prev = self.assigned_groups[*segment_index];
+                if prev == usize::MAX || !group.is_closed() {
+                    self.assigned_groups[*segment_index] = group_index;
+                }
             }
         }
     }

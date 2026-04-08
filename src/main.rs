@@ -14,10 +14,15 @@ use winit::{
 mod app;
 mod best_placements;
 mod bind_groups;
+mod camera;
 mod data;
+mod file_watcher;
+mod game_data;
 mod gpu;
 mod group;
 mod group_assignments;
+mod hex;
+mod input_state;
 mod lerp;
 mod map;
 mod pipeline;
@@ -26,8 +31,11 @@ mod render_ui;
 mod shader;
 mod textures;
 mod tile_frequency;
+mod ui_state;
 
+#[cfg(feature = "desktop")]
 mod opencv;
+#[cfg(feature = "desktop")]
 mod xlib;
 
 struct Ui {
@@ -70,11 +78,6 @@ fn run(
     mut ui: Ui,
     mut app: App,
 ) {
-    let mut show_tooltip = false;
-    let mut show_groups = false;
-    let mut show_biggest_groups = true;
-    let mut show_tile_frequencies = false;
-    let mut sidebar_expanded = true;
     event_loop.run(move |event, _, control_flow| {
         // What the actual??
         // Have the closure take ownership of the resources.
@@ -101,23 +104,23 @@ fn run(
                     WindowEvent::MouseInput { button, state, .. } => {
                         match (button, state) {
                             (MouseButton::Left, ElementState::Pressed) => {
-                                app.grab_move = true;
+                                app.input.grab_move = true;
                             }
                             (MouseButton::Left, ElementState::Released) => {
-                                app.grab_move = false;
+                                app.input.grab_move = false;
                             }
                             (MouseButton::Right, ElementState::Pressed) => {
-                                app.grab_rotate = true;
+                                app.input.grab_rotate = true;
                             }
                             (MouseButton::Right, ElementState::Released) => {
-                                app.grab_rotate = false;
+                                app.input.grab_rotate = false;
                             }
                             _ => {}
                         }
 
                         // Lock the mouse so that we can't leave the window while dragging and
                         // enter a crooked button state.
-                        let grab_mode = if !app.grab_move && !app.grab_rotate {
+                        let grab_mode = if !app.input.grab_move && !app.input.grab_rotate {
                             winit::window::CursorGrabMode::None
                         } else {
                             winit::window::CursorGrabMode::Confined
@@ -131,7 +134,7 @@ fn run(
                     WindowEvent::MouseWheel {
                         delta: MouseScrollDelta::LineDelta(_, y),
                         ..
-                    } => app.on_scroll(y),
+                    } => app.camera.on_scroll(y),
                     WindowEvent::CloseRequested => {
                         *control_flow = ControlFlow::Exit;
                     }
@@ -139,7 +142,7 @@ fn run(
                         // Window has been resized. Adjust render pipeline settings.
                         gpu.resize(size.width, size.height);
                         pipeline.resize(size.width, size.height);
-                        app.resize(UVec2::new(size.width, size.height));
+                        app.camera.resize(UVec2::new(size.width, size.height));
 
                         // On macos the window needs to be redrawn manually after resizing
                         window.request_redraw();
@@ -152,15 +155,14 @@ fn run(
             }
             Event::RedrawRequested(_) => {
                 let (paint_jobs, textures_delta) = ui.run(&window, |ctx| {
-                    // TODO move these bools somewhere.... TODO what bools?
                     render_ui(
-                        &mut app,
+                        &mut app.data,
+                        &mut app.camera,
+                        &mut app.ui_state,
+                        &mut app.file_watcher,
+                        &app.input,
+                        &mut app.pending_zoom_fit,
                         ctx,
-                        &mut sidebar_expanded,
-                        &mut show_tooltip,
-                        &mut show_groups,
-                        &mut show_biggest_groups,
-                        &mut show_tile_frequencies,
                     );
                 });
 
@@ -191,9 +193,9 @@ fn main() {
     let arguments = env::args().collect::<Vec<_>>();
     if arguments.len() > 1 {
         let file = PathBuf::from(&arguments[1]);
-        app.set_file_path(&file);
+        app.file_watcher.set_file_path(&file);
     } else {
-        app.use_previous_file_path();
+        app.file_watcher.use_previous_file_path();
     }
 
     run(event_loop, window, gpu, pipeline, ui, app);

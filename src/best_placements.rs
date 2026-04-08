@@ -5,6 +5,7 @@ use crate::{
     group::GroupIndex,
     group_assignments::GroupAssignments,
     map::Map,
+    tile_frequency::TileFrequencies,
 };
 
 pub const MAX_SHOWN_PLACEMENTS: usize = 30;
@@ -15,12 +16,14 @@ pub struct GroupEdgeAlteration {
     pub diff: i8,
 }
 
-/// Effect on a top-3 group's open edges from a placement.
+/// Effect on a group's open edges from a placement.
 #[derive(Debug, Clone)]
-pub struct TopGroupEffect {
+pub struct GroupEffect {
     pub terrain: Terrain,
-    /// 1 = largest, 2 = second, 3 = third.
-    pub rank: u8,
+    /// Rank among groups of the same terrain (1 = largest).
+    pub rank: usize,
+    /// Current number of open edges before placement.
+    pub open_edges_before: usize,
     /// Change in open edges for this group.
     pub open_edge_delta: i8,
 }
@@ -37,24 +40,42 @@ pub struct PlacementScore {
     pub connection_difficulty: u8,
     /// Rail/River edges from existing tiles pointing at empty neighbors we'd crowd.
     pub crowding: u8,
-    /// Net change in group open ends: new open ends created minus existing ones closed.
-    pub open_end_delta: i8,
-    /// Effects on top-3 groups' open edges.
-    pub top_group_effects: Vec<TopGroupEffect>,
+    /// Effects on groups with >5 tiles.
+    pub group_effects: Vec<GroupEffect>,
     pub group_edge_alterations: Vec<GroupEdgeAlteration>,
+    /// Probability (0.0-1.0) of finding a tile that fits here based on empirical frequencies.
+    pub fit_chance: f32,
+    /// Number of unique tile patterns that fit at any rotation.
+    pub fit_unique: u16,
+    /// How placing here changes the fit chance for each empty neighbor.
+    pub neighbor_fit_effects: Vec<NeighborFitEffect>,
+}
+
+/// How placing a tile affects the fit chance at one empty neighbor.
+#[derive(Debug, Clone)]
+pub struct NeighborFitEffect {
+    /// Which side of the placement (0-5).
+    pub side: usize,
+    /// Fit chance at the neighbor position BEFORE placement (current state).
+    pub chance_before: f32,
+    /// Fit chance at the neighbor position AFTER placement (with new edge constraint).
+    pub chance_after: f32,
 }
 
 impl PlacementScore {
     fn to_orderable(&self) -> impl Ord {
+        // Primary: lower fit_chance = harder to fill = place here first.
+        // Convert to fixed-point for Ord (f32 doesn't impl Ord).
+        let fit_key = std::cmp::Reverse((self.fit_chance * 1_000_000.0) as u32);
         (
-            self.matching_edges as i16 - self.connection_difficulty as i16,
+            fit_key,
+            self.matching_edges,
+            std::cmp::Reverse(self.connection_difficulty),
             std::cmp::Reverse(self.crowding),
-            std::cmp::Reverse(self.open_end_delta),
             self.neighbor_bonus,
             // Use the following to prevent duplicate removal.
             self.pos.x,
             self.pos.y,
-            // Don't use rotation here, we DO drop duplicates with the same rotation.
         )
     }
 }
@@ -302,44 +323,6 @@ fn crowding(map: &Map, pos: Pos) -> u8 {
     total
 }
 
-/// Net change in group open ends from placing the next tile at `pos` with `rotation`.
-/// Counts new open ends (tile segments pointing at empty neighbors) minus
-/// existing open ends that get closed (neighbor segments pointing at this slot).
-fn open_end_delta(map: &Map, pos: Pos, rotation: Rotation) -> i8 {
-    let mut created: i8 = 0;
-    let mut closed: i8 = 0;
-    for side in 0..HEX_SIDES {
-        let neighbor_pos = Map::neighbor_pos_of(pos, side);
-        let other_side = Map::opposite_side(side);
-        let neighbor_tile = map
-            .tile_key(neighbor_pos)
-            .and_then(|key| map.rendered_tiles[key]);
-
-        let my_terrain = map
-            .next_tile
-            .iter()
-            .find(|seg| seg.contains_rotation((side + HEX_SIDES - rotation) % HEX_SIDES))
-            .map(|s| s.terrain);
-
-        match neighbor_tile {
-            None => {
-                // Empty neighbor: our segment creates a new open end.
-                if my_terrain.is_some_and(|t| t != Terrain::Empty) {
-                    created += 1;
-                }
-            }
-            Some(segments) => {
-                // Occupied neighbor: their segment pointing at us was an open end, now closed.
-                let other_terrain = segments[other_side].map(|idx| map.segments[idx].terrain);
-                if other_terrain.is_some_and(|t| t != Terrain::Empty) {
-                    closed += 1;
-                }
-            }
-        }
-    }
-    created - closed
-}
-
 /// Check whether placing a tile at `pos` would split a contiguous empty region into
 /// multiple holes. Walks the 6 neighbors and counts runs of occupied/empty tiles around
 /// the hex (wrapping around). More than one run of empty neighbors means the placement
@@ -387,120 +370,290 @@ impl BestPlacements {
         };
         let connection_difficulty = connection_difficulty(map, pos, rotation);
         let crowding = crowding(map, pos);
-        let open_end_delta = open_end_delta(map, pos, rotation);
-
         Some(PlacementScore {
             pos,
             rotation,
             matching_edges,
             connection_difficulty,
             crowding,
-            open_end_delta,
             neighbor_bonus,
-            top_group_effects: Vec::new(),
+            group_effects: Vec::new(),
             group_edge_alterations: Vec::new(),
+            fit_chance: 0.0,
+            fit_unique: 0,
+            neighbor_fit_effects: Vec::new(),
         })
     }
 
-    pub fn iter_usable(&self) -> impl Iterator<Item = (usize, &PlacementScore)> {
-        let max_edges = self
-            .best_placements
-            .iter()
-            .next_back()
-            .map_or(0, |s| s.matching_edges);
+    /// Find the placement closest to `pos` within `max_dist` hex distance.
+    pub fn find_nearest(&self, pos: Pos, max_dist: i32) -> Option<&PlacementScore> {
         self.best_placements
             .iter()
-            .rev()
-            .take_while(move |s| s.matching_edges == max_edges)
-            .take(MAX_SHOWN_PLACEMENTS)
-            .enumerate()
+            .filter(|s| (s.pos.x - pos.x).abs() <= max_dist && (s.pos.y - pos.y).abs() <= max_dist)
+            .min_by_key(|s| (s.pos.x - pos.x).pow(2) + (s.pos.y - pos.y).pow(2))
     }
 
     pub fn iter_all(&self) -> Vec<(usize, &PlacementScore)> {
-        // Collect top N by score.
-        let mut result: Vec<&PlacementScore> = self
+        // Top N by score (stable order from BTreeSet).
+        let top: Vec<&PlacementScore> = self
             .best_placements
             .iter()
             .rev()
             .take(MAX_SHOWN_PLACEMENTS)
             .collect();
 
-        // Add any with top_group_effects that aren't already included.
+        // Append any with group_effects not already in top N.
+        let mut result = top.clone();
         for score in &self.best_placements {
-            if !score.top_group_effects.is_empty()
-                && !result.iter().any(|s| std::ptr::eq(*s, score))
-            {
+            if !score.group_effects.is_empty() && !result.iter().any(|s| std::ptr::eq(*s, score)) {
                 result.push(score);
             }
         }
 
-        // Re-sort descending by orderable.
-        result.sort_by(|a, b| b.cmp(a));
         result.into_iter().enumerate().collect()
     }
 }
 
-/// A top-3 group entry for a terrain, with its rank and group index.
-struct TopGroup {
-    terrain: Terrain,
-    rank: u8,
+/// A group with >5 tiles, tracked for placement effect computation.
+struct LargeGroup {
     group_idx: GroupIndex,
+    /// Rank among groups of same terrain (1 = largest by unit count).
+    rank: usize,
 }
 
-/// Compute effects on top-3 groups from placing next tile at `pos` with `rotation`.
-fn top_group_effects(
+const MIN_GROUP_SIZE: usize = 5;
+
+/// Compute effects on large groups (>5 tiles) from placing next tile at `pos` with `rotation`.
+/// Accounts for merging: if multiple groups of the same terrain touch this position,
+/// they'd merge into one group.
+///
+/// Reports the number of unique open-edge POSITIONS (= tiles needed to close) before
+/// and after placement. "Before" is the union of all merging groups' open edges.
+/// "After" removes the placed position and adds any new open edges from the placed tile.
+fn large_group_effects(
     map: &Map,
     groups: &GroupAssignments,
-    top_groups: &[TopGroup],
+    large_groups: &[LargeGroup],
     pos: Pos,
     rotation: Rotation,
-) -> Vec<TopGroupEffect> {
-    let mut effects = Vec::new();
-    for tg in top_groups {
-        let group = &groups.groups[tg.group_idx];
-        if !group.open_edges.contains(&pos) {
-            continue;
+) -> Vec<GroupEffect> {
+    use std::collections::HashMap;
+    use std::collections::HashSet;
+
+    let mut by_terrain: HashMap<Terrain, Vec<&LargeGroup>> = HashMap::new();
+    for lg in large_groups {
+        let group = &groups.groups[lg.group_idx];
+        if group.open_edges.contains(&pos) {
+            by_terrain.entry(group.terrain).or_default().push(lg);
         }
-        // This placement fills an open edge of this group.
-        // -1 for closing this position as an open edge.
-        let mut delta: i8 = -1;
-        // Check if our tile creates new open edges for this group:
-        // for each empty neighbor of pos, if our tile has a segment with matching
-        // terrain pointing that way, it extends the group and creates a new open edge.
-        let group_terrain = tg.terrain;
+    }
+
+    let mut effects = Vec::new();
+    for (terrain, touching) in &by_terrain {
+        let best_rank = touching.iter().map(|lg| lg.rank).min().unwrap_or(1);
+        let kind = groups.groups[touching[0].group_idx].kind;
+
+        // Before: union of all merging groups' open edge positions.
+        let mut open_before: HashSet<Pos> = HashSet::new();
+        for lg in touching {
+            open_before.extend(&groups.groups[lg.group_idx].open_edges);
+        }
+        let before = open_before.len();
+
+        // After: start from the before set.
+        let mut open_after = open_before;
+
+        // The placed position is no longer open.
+        open_after.remove(&pos);
+
+        // For each side of the placed tile: check if it creates a new open edge.
         for side in 0..HEX_SIDES {
             let neighbor_pos = Map::neighbor_pos_of(pos, side);
-            let neighbor_occupied = map
-                .tile_key(neighbor_pos)
-                .and_then(|key| map.rendered_tiles[key])
-                .is_some();
-            if neighbor_occupied {
-                continue;
-            }
+
+            // Does the placed tile have a matching segment on this side?
             let my_terrain = map
                 .next_tile
                 .iter()
                 .find(|seg| seg.contains_rotation((side + HEX_SIDES - rotation) % HEX_SIDES))
                 .map(|s| s.terrain);
-            if my_terrain.is_some_and(|t| t.extends_group_of(group_terrain)) {
-                delta += 1;
+            let has_matching_segment = my_terrain.is_some_and(|t| kind.accepts(t));
+
+            if !has_matching_segment {
+                continue;
             }
+
+            // If neighbor is occupied, this edge connects to something (not open).
+            let neighbor_occupied = map
+                .tile_key(neighbor_pos)
+                .and_then(|key| map.rendered_tiles[key])
+                .is_some();
+            if neighbor_occupied {
+                // This side connects to an existing tile — the neighbor's facing edge
+                // was an open edge of that group, now it's closed.
+                // (It's already in open_after from the before set if it was open.)
+                // Actually: the neighbor position was open if the NEIGHBOR had an open
+                // edge pointing at us. But open_edges tracks the EMPTY positions, not
+                // the neighbor tile. Since we're filling `pos`, we already removed it.
+                // No further action needed.
+                continue;
+            }
+
+            // Neighbor is empty and our tile points there: new open edge.
+            open_after.insert(neighbor_pos);
         }
-        effects.push(TopGroupEffect {
-            terrain: tg.terrain,
-            rank: tg.rank,
-            open_edge_delta: delta,
+
+        let after = open_after.len();
+        let delta = after as i32 - before as i32;
+
+        let merge_label = if touching.len() > 1 {
+            // Show the best rank with a merge indicator.
+            best_rank
+        } else {
+            touching[0].rank
+        };
+
+        effects.push(GroupEffect {
+            terrain: *terrain,
+            rank: merge_label,
+            open_edges_before: before,
+            open_edge_delta: delta.clamp(-128, 127) as i8,
         });
     }
     effects
 }
 
-impl From<(&Map, &GroupAssignments)> for BestPlacements {
-    fn from(data: (&Map, &GroupAssignments)) -> Self {
-        let map = data.0;
-        let groups = data.1;
+/// Collect edge constraints at `pos` from the map (occupied neighbors).
+pub fn constraints_at(map: &Map, pos: Pos) -> [Option<Terrain>; HEX_SIDES] {
+    let mut constraints: [Option<Terrain>; HEX_SIDES] = [None; HEX_SIDES];
+    for (side, constraint) in constraints.iter_mut().enumerate() {
+        let npos = Map::neighbor_pos_of(pos, side);
+        let other_side = Map::opposite_side(side);
+        if let Some(rendered) = map.tile_key(npos).and_then(|key| map.rendered_tiles[key]) {
+            let terrain = rendered[other_side]
+                .map(|idx| map.segments[idx].terrain)
+                .unwrap_or(Terrain::Empty);
+            *constraint = Some(terrain);
+        }
+    }
+    constraints
+}
 
-        // Pre-compute top-3 open groups per terrain by unit count.
+/// Count matching edges for a tile profile at constraints.
+fn count_matches(
+    profile: &crate::data::EdgeProfile,
+    constraints: &[Option<Terrain>; HEX_SIDES],
+) -> (u8, bool) {
+    use crate::data::EdgeMatch;
+    let mut matches = 0u8;
+    let mut legal = true;
+    for (side, c) in constraints.iter().enumerate() {
+        if let Some(neighbor) = c {
+            match profile.at_index(side).connects_and_matches(*neighbor) {
+                EdgeMatch::Matching => matches += 1,
+                EdgeMatch::Missing => {}
+                EdgeMatch::Suboptimal | EdgeMatch::Illegal => legal = false,
+            }
+        }
+    }
+    (matches, legal)
+}
+
+/// Compute the chance that a random tile from the frequency table fits given constraints.
+/// "Fits" means legal (no Suboptimal/Illegal edges).
+/// Returns (chance 0.0-1.0, number of unique fitting patterns).
+pub fn fit_chance_for_constraints(
+    freqs: &TileFrequencies,
+    constraints: &[Option<Terrain>; HEX_SIDES],
+) -> (f32, u16) {
+    fit_chance_with_min_edges(freqs, constraints, 0)
+}
+
+/// Compute the chance that a random tile fits with at least `min_matching` matching edges.
+pub fn fit_chance_with_min_edges(
+    freqs: &TileFrequencies,
+    constraints: &[Option<Terrain>; HEX_SIDES],
+    min_matching: u8,
+) -> (f32, u16) {
+    let mut matching_count: usize = 0;
+    let mut matching_unique: u16 = 0;
+
+    for entry in &freqs.entries {
+        let profile = crate::data::EdgeProfile::from_segments(&entry.segments);
+        let mut counted = false;
+        for rot in 0..HEX_SIDES {
+            let rotated = profile.rotated(rot);
+            let (matches, legal) = count_matches(&rotated, constraints);
+            if legal && matches >= min_matching && !counted {
+                matching_unique += 1;
+                matching_count += entry.count;
+                counted = true;
+            }
+        }
+    }
+
+    let chance = if freqs.total_tiles > 0 {
+        matching_count as f32 / freqs.total_tiles as f32
+    } else {
+        0.0
+    };
+    (chance, matching_unique)
+}
+
+/// Compute fit chance at `pos` from current map state.
+fn compute_fit_chance(map: &Map, freqs: &TileFrequencies, pos: Pos) -> (f32, u16) {
+    fit_chance_for_constraints(freqs, &constraints_at(map, pos))
+}
+
+/// Compute how placing the next tile at `pos` with `rotation` changes the fit chance
+/// for each empty neighbor.
+fn compute_neighbor_fit_effects(
+    map: &Map,
+    freqs: &TileFrequencies,
+    pos: Pos,
+    rotation: Rotation,
+) -> Vec<NeighborFitEffect> {
+    let next_profile = crate::data::EdgeProfile::from_segments(&map.next_tile).rotated(rotation);
+    let mut effects = Vec::new();
+
+    for side in 0..HEX_SIDES {
+        let neighbor_pos = Map::neighbor_pos_of(pos, side);
+        // Only care about empty neighbors.
+        let neighbor_occupied = map
+            .tile_key(neighbor_pos)
+            .and_then(|key| map.rendered_tiles[key])
+            .is_some();
+        if neighbor_occupied {
+            continue;
+        }
+
+        // Before: current constraints at the neighbor.
+        let constraints_before = constraints_at(map, neighbor_pos);
+        let (chance_before, _) = fit_chance_for_constraints(freqs, &constraints_before);
+
+        // After: same constraints plus the placed tile's edge on the facing side.
+        let facing_side = Map::opposite_side(side);
+        let mut constraints_after = constraints_before;
+        constraints_after[facing_side] = Some(next_profile.at_index(side));
+
+        let (chance_after, _) = fit_chance_for_constraints(freqs, &constraints_after);
+
+        // Normally adding a constraint can only reduce options.
+        // Edge case: neighbor at map boundary may have incomplete constraints.
+        let chance_after = chance_after.min(chance_before);
+
+        effects.push(NeighborFitEffect {
+            side,
+            chance_before,
+            chance_after,
+        });
+    }
+    effects
+}
+
+impl BestPlacements {
+    pub fn compute(map: &Map, groups: &GroupAssignments, freqs: &TileFrequencies) -> Self {
+        // Collect all open groups with more than MIN_GROUP_SIZE tiles,
+        // ranked per terrain by unit count (1 = largest).
         use std::collections::HashMap;
         let mut per_terrain: HashMap<Terrain, Vec<(usize, u32)>> = HashMap::new();
         for (idx, group) in groups.groups.iter().enumerate() {
@@ -512,15 +665,16 @@ impl From<(&Map, &GroupAssignments)> for BestPlacements {
                 .or_default()
                 .push((idx, group.unit_count));
         }
-        let mut top_groups = Vec::new();
-        for (terrain, mut entries) in per_terrain {
+        let mut large_groups = Vec::new();
+        for (_, mut entries) in per_terrain {
             entries.sort_by(|a, b| b.1.cmp(&a.1));
-            for (rank, (group_idx, _)) in entries.iter().take(3).enumerate() {
-                top_groups.push(TopGroup {
-                    terrain,
-                    rank: rank as u8 + 1,
-                    group_idx: *group_idx,
-                });
+            for (rank_0, &(group_idx, _)) in entries.iter().take(25).enumerate() {
+                if groups.groups[group_idx].segment_indices.len() > MIN_GROUP_SIZE {
+                    large_groups.push(LargeGroup {
+                        group_idx,
+                        rank: rank_0 + 1,
+                    });
+                }
             }
         }
 
@@ -530,12 +684,17 @@ impl From<(&Map, &GroupAssignments)> for BestPlacements {
             let best_rotation = (0..HEX_SIDES)
                 .filter_map(|rotation| {
                     let mut score = BestPlacements::score_of_next_at(map, groups, *pos, rotation)?;
-                    score.top_group_effects =
-                        top_group_effects(map, groups, &top_groups, *pos, rotation);
+                    score.group_effects =
+                        large_group_effects(map, groups, &large_groups, *pos, rotation);
                     Some(score)
                 })
                 .max();
-            if let Some(score) = best_rotation {
+            if let Some(mut score) = best_rotation {
+                let (chance, unique) = compute_fit_chance(map, freqs, *pos);
+                score.fit_chance = chance;
+                score.fit_unique = unique;
+                score.neighbor_fit_effects =
+                    compute_neighbor_fit_effects(map, freqs, *pos, score.rotation);
                 best_placements.insert(score);
             }
         }
