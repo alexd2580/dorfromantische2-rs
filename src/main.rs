@@ -1,9 +1,10 @@
 use app::App;
 use glam::{UVec2, Vec2};
-use gpu::Gpu;
-use pipeline::Pipeline;
-use render_ui::render_ui;
+use render::gpu::Gpu;
+use render::pipeline::Pipeline;
 use std::{env, path::PathBuf};
+use ui::egui_integration::EguiIntegration;
+use ui::render_ui::render_ui;
 use winit::{
     dpi::PhysicalPosition,
     event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent},
@@ -13,61 +14,18 @@ use winit::{
 
 mod app;
 mod best_placements;
-mod bind_groups;
-mod camera;
 mod data;
 mod file_watcher;
+mod game;
 mod game_data;
-mod gpu;
 mod group;
 mod group_assignments;
 mod hex;
-mod input_state;
-mod lerp;
 mod map;
-mod pipeline;
 mod raw_data;
-mod render_ui;
-mod shader;
-mod textures;
+mod render;
 mod tile_frequency;
-mod ui_state;
-
-#[cfg(feature = "desktop")]
-mod opencv;
-#[cfg(feature = "desktop")]
-mod xlib;
-
-struct Ui {
-    context: egui::Context,
-    state: egui_winit::State,
-}
-
-impl Ui {
-    fn new(window: &Window) -> Self {
-        Self {
-            context: egui::Context::default(),
-            state: egui_winit::State::new(window),
-        }
-    }
-
-    fn on_event(&mut self, event: &WindowEvent) -> egui_winit::EventResponse {
-        self.state.on_event(&self.context, event)
-    }
-
-    fn run(
-        &mut self,
-        window: &Window,
-        run_ui: impl FnOnce(&egui::Context),
-    ) -> (Vec<egui::ClippedPrimitive>, egui::TexturesDelta) {
-        let egui::FullOutput {
-            shapes,
-            textures_delta,
-            ..
-        } = self.context.run(self.state.take_egui_input(window), run_ui);
-        (self.context.tessellate(shapes), textures_delta)
-    }
-}
+mod ui;
 
 #[allow(for_loops_over_fallibles)]
 fn run(
@@ -75,7 +33,7 @@ fn run(
     window: Window,
     mut gpu: Gpu,
     mut pipeline: Pipeline,
-    mut ui: Ui,
+    mut ui: EguiIntegration,
     mut app: App,
 ) {
     event_loop.run(move |event, _, control_flow| {
@@ -155,12 +113,13 @@ fn run(
             }
             Event::RedrawRequested(_) => {
                 let (paint_jobs, textures_delta) = ui.run(&window, |ctx| {
-                    render_ui(
+                    app.visible_rect = render_ui(
                         &mut app.data,
                         &mut app.camera,
                         &mut app.ui_state,
                         &mut app.file_watcher,
                         &app.input,
+                        &app.game_nav,
                         &mut app.pending_zoom_fit,
                         ctx,
                     );
@@ -168,7 +127,13 @@ fn run(
 
                 app.tick(&gpu);
                 let bind_groups = app.bind_groups.groups.as_ref().map(<[_; 1]>::as_slice);
-                pipeline.redraw(&gpu, bind_groups, &paint_jobs, textures_delta);
+                pipeline.redraw(
+                    &gpu,
+                    bind_groups,
+                    &paint_jobs,
+                    textures_delta,
+                    app.visible_rect,
+                );
             }
             _ => {}
         }
@@ -187,7 +152,7 @@ fn main() {
     let gpu = pollster::block_on(Gpu::new(&window));
     let mut app = App::new(&window, &gpu);
     let pipeline = Pipeline::new(&gpu, &window, &app.bind_groups.layouts);
-    let ui = Ui::new(&window);
+    let ui = EguiIntegration::new(&window);
 
     // Load the specified or previous file.
     let arguments = env::args().collect::<Vec<_>>();

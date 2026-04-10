@@ -10,7 +10,7 @@ use std::io::Cursor;
 fn main() {
     let path = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "biggame.sav".into());
+        .unwrap_or_else(|| "calibration/savegame.sav".into());
     let data = std::fs::read(&path).unwrap_or_else(|e| {
         eprintln!("Failed to read {path}: {e}");
         std::process::exit(1);

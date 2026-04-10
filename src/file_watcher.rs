@@ -98,9 +98,6 @@ impl MapLoader {
                 let groups = GroupAssignments::from(&map);
                 let freqs = crate::tile_frequency::TileFrequencies::from_map(&map);
                 let best_placements = BestPlacements::compute(&map, &groups, &freqs);
-                #[cfg(feature = "desktop")]
-                crate::opencv::map_to_img(&map);
-
                 let map_loaded = start.elapsed();
                 println!("Map loaded in: {map_loaded:?}");
 

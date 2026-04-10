@@ -1,5 +1,6 @@
 pub mod best_placements;
 pub mod data;
+pub mod game;
 pub mod group;
 pub mod group_assignments;
 pub mod hex;

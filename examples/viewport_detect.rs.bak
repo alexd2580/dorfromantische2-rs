@@ -1,0 +1,549 @@
+//! Visualize the viewport detection pipeline.
+//! Takes a game screenshot and the map, and shows each step:
+//! 1. Screenshot → binary mask (tile vs background)
+//! 2. Unproject through game camera → top-down silhouette
+//! 3. Map silhouette at same scale
+//! 4. Cross-correlation to find offset
+//!
+//! Run with: cargo run --no-default-features --example viewport_detect -- calibration_02.png
+
+use dorfromantische2_rs::game_camera::GameCamera;
+use dorfromantische2_rs::hex;
+use dorfromantische2_rs::map::Map;
+use dorfromantische2_rs::raw_data::SaveGame;
+use glam::Vec2;
+use std::io::Cursor;
+
+fn main() {
+    let screenshot_path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "calibration_02.png".into());
+
+    println!("Loading savegame...");
+    let data = std::fs::read("biggame.sav").unwrap();
+    let parsed = nrbf_rs::parse_nrbf(&mut Cursor::new(&data));
+    let sg = SaveGame::try_from(&parsed).unwrap();
+    let map = Map::from(&sg);
+
+    println!("Loading screenshot: {screenshot_path}");
+    let screenshot = image::open(&screenshot_path).unwrap().to_rgb8();
+    let (sw, sh) = (screenshot.width() as usize, screenshot.height() as usize);
+
+    // Step 1: Binarize screenshot.
+    println!("Step 1: Binarizing screenshot...");
+    let mask = binarize_screenshot(&screenshot);
+    save_gray("step1_mask.png", &mask, sw, sh);
+    println!("  Saved step1_mask.png");
+
+    // Step 2: Unproject to top-down view (full screen, no cropping).
+    println!("Step 2: Unprojecting through game camera...");
+    let cam = GameCamera::default();
+    let (unprojected, unproj_bounds) = unproject_mask(&mask, sw, sh, &cam);
+    save_gray(
+        "step2_unprojected.png",
+        &unprojected,
+        unproj_bounds.width,
+        unproj_bounds.height,
+    );
+    println!(
+        "  Saved step2_unprojected.png ({}x{})",
+        unproj_bounds.width, unproj_bounds.height,
+    );
+
+    // Step 3: Render map silhouette.
+    println!("Step 3: Rendering map silhouette...");
+    let map_ppu = {
+        let mut mx0 = f32::MAX;
+        let mut mx1 = f32::MIN;
+        let mut my0 = f32::MAX;
+        let mut my1 = f32::MIN;
+        for pos in map.iter_tile_positions() {
+            let w = hex::hex_to_world(pos);
+            mx0 = mx0.min(w.x);
+            mx1 = mx1.max(w.x);
+            my0 = my0.min(w.y);
+            my1 = my1.max(w.y);
+        }
+        2000.0 / (mx1 - mx0).max(my1 - my0)
+    };
+    let (map_sil, map_bounds) = render_map_silhouette(&map, map_ppu);
+    save_gray(
+        "step3_map_silhouette.png",
+        &map_sil,
+        map_bounds.width,
+        map_bounds.height,
+    );
+    println!(
+        "  Map: {}x{} (ppu={:.2})",
+        map_bounds.width, map_bounds.height, map_ppu
+    );
+
+    // Step 4: Scale template to match the map silhouette.
+    // The game shows ~35 tiles across. We know the map's ppu.
+    // Target template width = 35 tiles × 1.5 world_units/tile × map_ppu.
+    let tiles_across = 35.0_f32;
+    let target_w = tiles_across * 1.5 * map_ppu;
+    let scale = target_w / unproj_bounds.width as f32;
+    let scaled_tw = (unproj_bounds.width as f32 * scale) as usize;
+    let scaled_th = (unproj_bounds.height as f32 * scale) as usize;
+    println!(
+        "  Target: {:.0}px wide ({:.0} tiles), scale: {:.3} → template {}x{} vs map {}x{}",
+        target_w, tiles_across, scale,
+        scaled_tw, scaled_th, map_bounds.width, map_bounds.height,
+    );
+    let scaled_template = scale_image(
+        &unprojected, unproj_bounds.width, unproj_bounds.height,
+        scaled_tw, scaled_th,
+    );
+
+    println!("Step 4: Cross-correlating...");
+    let (best_x, best_y, best_score) = find_best_offset(
+        &map_sil, map_bounds.width, map_bounds.height,
+        &scaled_template, scaled_tw, scaled_th,
+    );
+    println!("  Best offset: ({best_x}, {best_y}), score: {best_score:.4}");
+
+    // Convert pixel offset to world coordinates.
+    let center_px_x = best_x as f32 + scaled_tw as f32 / 2.0;
+    let center_px_y = best_y as f32 + scaled_th as f32 / 2.0;
+    let center_x = map_bounds.min_x + center_px_x / map_ppu;
+    let center_y = map_bounds.max_y - center_px_y / map_ppu;
+    println!("  Estimated game center: ({center_x:.1}, {center_y:.1})");
+    let hex_pos = hex::world_to_hex(Vec2::new(center_x, center_y));
+    println!("  Hex position: ({}, {})", hex_pos.x, hex_pos.y);
+
+    // Step 5: Save overlay with the scaled template.
+    println!("Step 5: Saving overlay...");
+    save_overlay(
+        "step5_overlay.png",
+        &map_sil,
+        map_bounds.width,
+        map_bounds.height,
+        &scaled_template,
+        scaled_tw,
+        scaled_th,
+        best_x,
+        best_y,
+    );
+    println!("  Saved step5_overlay.png");
+}
+
+fn binarize_screenshot(img: &image::RgbImage) -> Vec<u8> {
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let mut mask = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let p = img.get_pixel(x as u32, y as u32);
+            let r = p[0] as f32;
+            let g = p[1] as f32;
+            let b = p[2] as f32;
+            // Pink background: high R, medium G/B, R > G, R > B.
+            let is_pink =
+                r > 180.0 && g > 140.0 && b > 140.0 && r > g && r > b && (r - g) > 20.0;
+            // Light blue (water): similar to pink but B >= G.
+            let is_water = r > 160.0 && g > 180.0 && b > 200.0;
+            // Sky/fog at top.
+            let is_sky = r > 200.0 && g > 190.0 && b > 190.0 && y < h / 5;
+            mask[y * w + x] = if is_pink || is_water || is_sky { 0 } else { 255 };
+        }
+    }
+    // Mask out UI corners.
+    for y in 0..h / 8 {
+        for x in (w * 3 / 4)..w {
+            mask[y * w + x] = 0;
+        }
+    }
+    for y in (h * 3 / 4)..h {
+        for x in (w * 3 / 4)..w {
+            mask[y * w + x] = 0;
+        }
+    }
+    for y in 0..h / 8 {
+        for x in 0..w / 8 {
+            mask[y * w + x] = 0;
+        }
+    }
+    mask
+}
+
+#[derive(Clone, Debug)]
+struct Bounds {
+    min_x: f32,
+    max_x: f32,
+    min_y: f32,
+    max_y: f32,
+    width: usize,
+    height: usize,
+    pixels_per_unit: f32,
+}
+
+/// Nearest-neighbor downscale of a grayscale image.
+fn scale_image(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u8> {
+    let mut dst = vec![0u8; dw * dh];
+    for dy in 0..dh {
+        for dx in 0..dw {
+            let sx = dx * sw / dw;
+            let sy = dy * sh / dh;
+            dst[dy * dw + dx] = src[sy * sw + sx];
+        }
+    }
+    dst
+}
+
+fn unproject_mask_at_ppu(
+    mask: &[u8],
+    sw: usize,
+    sh: usize,
+    cam: &GameCamera,
+    ppu: f32,
+) -> (Vec<u8>, Bounds) {
+    // The game shows ~35 tiles across the screen center.
+    // 35 tiles × 1.5 world units/tile ≈ 52 world units in X.
+    // Use a fixed world extent centered on the screen center projection.
+    let center = cam.screen_to_world(Vec2::new(0.5, 0.5));
+    let half_extent_x = 35.0 * 1.5 / 2.0; // ~26 world units
+    let half_extent_y = 35.0 * 1.5 / 2.0; // roughly square visible area
+
+    let mut min_x = center.x - half_extent_x;
+    let mut max_x = center.x + half_extent_x;
+    let mut min_y = center.y - half_extent_y;
+    let mut max_y = center.y + half_extent_y;
+
+    let margin = 2.0;
+    min_x -= margin;
+    max_x += margin;
+    min_y -= margin;
+    max_y += margin;
+
+    println!(
+        "  Viewport world extent: x=[{:.1},{:.1}] y=[{:.1},{:.1}] ({:.0}x{:.0} units)",
+        min_x, max_x, min_y, max_y, max_x - min_x, max_y - min_y
+    );
+
+    let w = ((max_x - min_x) * ppu) as usize;
+    let h = ((max_y - min_y) * ppu) as usize;
+    if w == 0 || h == 0 {
+        return (vec![], Bounds {
+            min_x: 0.0, max_x: 0.0, min_y: 0.0, max_y: 0.0,
+            width: 0, height: 0, pixels_per_unit: ppu,
+        });
+    }
+    // Iterate in world space and project back to screen to sample the mask.
+    let mut img = vec![0u8; w * h];
+    for py in 0..h {
+        for px in 0..w {
+            let world = Vec2::new(
+                min_x + px as f32 / ppu,
+                max_y - py as f32 / ppu,
+            );
+            if let Some(screen) = cam.world_to_screen(world) {
+                let sx = (screen.x * sw as f32) as i32;
+                let sy = (screen.y * sh as f32) as i32;
+                if sx >= 0 && sx < sw as i32 && sy >= 0 && sy < sh as i32 {
+                    img[py * w + px] = mask[sy as usize * sw + sx as usize];
+                }
+            }
+        }
+    }
+    (img, Bounds { min_x, max_x, min_y, max_y, width: w, height: h, pixels_per_unit: ppu })
+}
+
+fn unproject_mask(
+    mask: &[u8],
+    sw: usize,
+    sh: usize,
+    cam: &GameCamera,
+) -> (Vec<u8>, Bounds) {
+    // First pass: collect world positions of all tile pixels.
+    let step = 4;
+    let mut world_xs = Vec::new();
+    let mut world_ys = Vec::new();
+    for sy in (0..sh).step_by(step) {
+        for sx in (0..sw).step_by(step) {
+            if mask[sy * sw + sx] > 0 {
+                let screen = Vec2::new(sx as f32 / sw as f32, sy as f32 / sh as f32);
+                let world = cam.screen_to_world(screen);
+                world_xs.push(world.x);
+                world_ys.push(world.y);
+            }
+        }
+    }
+
+    if world_xs.is_empty() {
+        return (vec![], Bounds {
+            min_x: 0.0, max_x: 0.0, min_y: 0.0, max_y: 0.0,
+            width: 0, height: 0, pixels_per_unit: 1.0,
+        });
+    }
+
+    // Use 5th-95th percentile to clip extreme horizon projections.
+    // The game shows ~35 tiles; horizon pixels project to 10x that distance.
+    world_xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    world_ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let n = world_xs.len();
+    let lo = n * 5 / 100;
+    let hi = n - 1 - n * 5 / 100;
+    let mut min_x = world_xs[lo];
+    let mut max_x = world_xs[hi];
+    let mut min_y = world_ys[lo];
+    let mut max_y = world_ys[hi];
+
+    let margin = 2.0;
+    min_x -= margin;
+    max_x += margin;
+    min_y -= margin;
+    max_y += margin;
+
+    println!(
+        "  Percentile world bounds: x=[{:.1},{:.1}] y=[{:.1},{:.1}] ({:.0}x{:.0} units)",
+        min_x, max_x, min_y, max_y, max_x - min_x, max_y - min_y
+    );
+
+    let max_img_dim = 400.0_f32;
+    let world_w = max_x - min_x;
+    let world_h = max_y - min_y;
+    let ppu = max_img_dim / world_w.max(world_h);
+    let w = ((max_x - min_x) * ppu) as usize;
+    let h = ((max_y - min_y) * ppu) as usize;
+
+    let mut img = vec![0u8; w * h];
+
+    // Second pass: iterate world space, project back to screen to sample mask.
+    // This avoids gaps from perspective stretching.
+    for py in 0..h {
+        for px in 0..w {
+            let world = Vec2::new(
+                min_x + px as f32 / ppu,
+                max_y - py as f32 / ppu,
+            );
+            if let Some(screen) = cam.world_to_screen(world) {
+                let sx = (screen.x * sw as f32) as i32;
+                let sy = (screen.y * sh as f32) as i32;
+                if sx >= 0 && sx < sw as i32 && sy >= 0 && sy < sh as i32 {
+                    img[py * w + px] = mask[sy as usize * sw + sx as usize];
+                }
+            }
+        }
+    }
+
+    (img, Bounds { min_x, max_x, min_y, max_y, width: w, height: h, pixels_per_unit: ppu })
+}
+
+fn render_map_silhouette(map: &Map, ppu: f32) -> (Vec<u8>, Bounds) {
+    // Find world bounds.
+    let mut min_x = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut min_y = f32::MAX;
+    let mut max_y = f32::MIN;
+
+    for pos in map.iter_tile_positions() {
+        let world = hex::hex_to_world(pos);
+        min_x = min_x.min(world.x);
+        max_x = max_x.max(world.x);
+        min_y = min_y.min(world.y);
+        max_y = max_y.max(world.y);
+    }
+
+    let margin = 2.0;
+    min_x -= margin;
+    max_x += margin;
+    min_y -= margin;
+    max_y += margin;
+
+    let w = ((max_x - min_x) * ppu) as usize;
+    let h = ((max_y - min_y) * ppu) as usize;
+    let mut img = vec![0u8; w * h];
+
+    // Fill a circle for each tile. Radius ~0.8 world units * ppu.
+    let r = (1.2 * ppu) as i32;
+    let r_sq = r * r;
+    for pos in map.iter_tile_positions() {
+        let world = hex::hex_to_world(pos);
+        let cx = ((world.x - min_x) * ppu) as i32;
+        let cy = ((max_y - world.y) * ppu) as i32;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx * dx + dy * dy <= r_sq {
+                    let x = cx + dx;
+                    let y = cy + dy;
+                    if x >= 0 && x < w as i32 && y >= 0 && y < h as i32 {
+                        img[y as usize * w + x as usize] = 255;
+                    }
+                }
+            }
+        }
+    }
+
+    (img, Bounds { min_x, max_x, min_y, max_y, width: w, height: h, pixels_per_unit: ppu })
+}
+
+/// Slide the template (unprojected) over the map silhouette and find best match.
+fn find_best_offset(
+    map_img: &[u8],
+    mw: usize,
+    mh: usize,
+    template: &[u8],
+    tw: usize,
+    th: usize,
+) -> (i32, i32, f32) {
+    if tw == 0 || th == 0 || mw == 0 || mh == 0 {
+        return (0, 0, 0.0);
+    }
+
+    let step = 4;
+    let mut best_score = f32::NEG_INFINITY;
+    let mut best_x = 0i32;
+    let mut best_y = 0i32;
+
+    // Template mean.
+    let t_sum: f64 = template.iter().map(|&v| v as f64).sum();
+    let t_mean = t_sum / (tw * th) as f64;
+
+    for oy in (0..=(mh as i32 - th as i32)).step_by(step) {
+        for ox in (0..=(mw as i32 - tw as i32)).step_by(step) {
+            let mut cov = 0.0f64;
+            let mut var_m = 0.0f64;
+            let mut var_t = 0.0f64;
+            let mut m_sum = 0.0f64;
+            let mut count = 0;
+
+            for ty in (0..th).step_by(2) {
+                for tx in (0..tw).step_by(2) {
+                    let mi = (oy as usize + ty) * mw + ox as usize + tx;
+                    let ti = ty * tw + tx;
+                    m_sum += map_img[mi] as f64;
+                    count += 1;
+                    let _ = (template[ti], map_img[mi]); // just to avoid unused
+                }
+            }
+            let m_mean = m_sum / count as f64;
+
+            for ty in (0..th).step_by(2) {
+                for tx in (0..tw).step_by(2) {
+                    let mi = (oy as usize + ty) * mw + ox as usize + tx;
+                    let ti = ty * tw + tx;
+                    let dm = map_img[mi] as f64 - m_mean;
+                    let dt = template[ti] as f64 - t_mean;
+                    cov += dm * dt;
+                    var_m += dm * dm;
+                    var_t += dt * dt;
+                }
+            }
+
+            let denom = (var_m * var_t).sqrt();
+            let score = if denom > 1e-10 { (cov / denom) as f32 } else { 0.0 };
+
+            if score > best_score {
+                best_score = score;
+                best_x = ox;
+                best_y = oy;
+            }
+        }
+    }
+
+    // Refine around best.
+    let refine_range = step as i32 * 2;
+    for oy in (best_y - refine_range).max(0)..=(best_y + refine_range).min(mh as i32 - th as i32) {
+        for ox in
+            (best_x - refine_range).max(0)..=(best_x + refine_range).min(mw as i32 - tw as i32)
+        {
+            let mut cov = 0.0f64;
+            let mut var_m = 0.0f64;
+            let mut var_t = 0.0f64;
+            let mut m_sum = 0.0f64;
+            let mut count = 0;
+            for ty in (0..th).step_by(2) {
+                for tx in (0..tw).step_by(2) {
+                    let mi = (oy as usize + ty) * mw + ox as usize + tx;
+                    m_sum += map_img[mi] as f64;
+                    count += 1;
+                }
+            }
+            let m_mean = m_sum / count as f64;
+            for ty in (0..th).step_by(2) {
+                for tx in (0..tw).step_by(2) {
+                    let mi = (oy as usize + ty) * mw + ox as usize + tx;
+                    let ti = ty * tw + tx;
+                    let dm = map_img[mi] as f64 - m_mean;
+                    let dt = template[ti] as f64 - t_mean;
+                    cov += dm * dt;
+                    var_m += dm * dm;
+                    var_t += dt * dt;
+                }
+            }
+            let denom = (var_m * var_t).sqrt();
+            let score = if denom > 1e-10 { (cov / denom) as f32 } else { 0.0 };
+            if score > best_score {
+                best_score = score;
+                best_x = ox;
+                best_y = oy;
+            }
+        }
+    }
+
+    (best_x, best_y, best_score)
+}
+
+fn save_gray(path: &str, data: &[u8], w: usize, h: usize) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    let img = image::GrayImage::from_raw(w as u32, h as u32, data.to_vec()).unwrap();
+    img.save(path).unwrap();
+}
+
+fn save_overlay(
+    path: &str,
+    map_img: &[u8],
+    mw: usize,
+    mh: usize,
+    template: &[u8],
+    tw: usize,
+    th: usize,
+    ox: i32,
+    oy: i32,
+) {
+    let mut overlay = image::RgbImage::new(mw as u32, mh as u32);
+
+    // Map silhouette in dark blue.
+    for y in 0..mh {
+        for x in 0..mw {
+            let v = map_img[y * mw + x];
+            overlay.put_pixel(x as u32, y as u32, image::Rgb([0, 0, v / 2]));
+        }
+    }
+
+    // Template overlay in yellow.
+    for ty in 0..th {
+        for tx in 0..tw {
+            let x = ox as usize + tx;
+            let y = oy as usize + ty;
+            if x < mw && y < mh && template[ty * tw + tx] > 0 {
+                let p = overlay.get_pixel(x as u32, y as u32);
+                overlay.put_pixel(
+                    x as u32,
+                    y as u32,
+                    image::Rgb([255, 255, p[2]]),
+                );
+            }
+        }
+    }
+
+    // Draw bounding box of template in red.
+    for x in ox.max(0) as usize..(ox as usize + tw).min(mw) {
+        if oy >= 0 && (oy as usize) < mh {
+            overlay.put_pixel(x as u32, oy as u32, image::Rgb([255, 0, 0]));
+        }
+        let bottom = (oy as usize + th).min(mh - 1);
+        overlay.put_pixel(x as u32, bottom as u32, image::Rgb([255, 0, 0]));
+    }
+    for y in oy.max(0) as usize..(oy as usize + th).min(mh) {
+        if ox >= 0 && (ox as usize) < mw {
+            overlay.put_pixel(ox as u32, y as u32, image::Rgb([255, 0, 0]));
+        }
+        let right = (ox as usize + tw).min(mw - 1);
+        overlay.put_pixel(right as u32, y as u32, image::Rgb([255, 0, 0]));
+    }
+
+    overlay.save(path).unwrap();
+}

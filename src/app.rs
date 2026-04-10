@@ -5,16 +5,16 @@ use winit::window::Window;
 
 use crate::{
     best_placements::MAX_SHOWN_PLACEMENTS,
-    bind_groups::BindGroups,
-    camera::Camera,
     file_watcher::FileWatcher,
     game_data::GameData,
-    gpu::{Buffer, Gpu, SizeOrContent},
-    input_state::InputState,
-    shader,
-    textures::Textures,
+    render::bind_groups::BindGroups,
+    render::camera::Camera,
+    render::gpu::{Buffer, Gpu, SizeOrContent},
+    render::shader,
+    render::textures::Textures,
     tile_frequency,
-    ui_state::UiState,
+    ui::input_state::InputState,
+    ui::ui_state::UiState,
 };
 
 #[allow(dead_code)]
@@ -48,8 +48,14 @@ pub struct App {
     // Input/mouse state.
     pub input: InputState,
 
+    // Game navigation.
+    pub game_nav: crate::game::game_nav::GameNav,
+
     // Ui.
     pub ui_state: UiState,
+
+    /// Area not covered by UI panels.
+    pub visible_rect: egui::Rect,
 }
 
 use crate::hex::COS_30;
@@ -124,8 +130,12 @@ impl App {
             // Input/mouse state.
             input: InputState::default(),
 
+            // Game navigation.
+            game_nav: crate::game::game_nav::GameNav::default(),
+
             // Ui.
             ui_state: UiState::default(),
+            visible_rect: egui::Rect::EVERYTHING,
         };
 
         let size = window.inner_size();
@@ -158,6 +168,15 @@ impl App {
         }
 
         self.input.mouse_position = pos;
+
+        // Only compute hover when mouse is in the map area.
+        let egui_pos = egui::Pos2::new(pos.x, pos.y);
+        if !self.visible_rect.contains(egui_pos) {
+            self.input.hover_segment = None;
+            self.input.hover_group = None;
+            return;
+        }
+
         let world_pos = self.camera.pixel_to_world(pos);
         self.input.hover_pos = Self::world_to_hex(world_pos);
         let offset = world_pos - App::hex_to_world(self.input.hover_pos);
@@ -241,11 +260,24 @@ impl App {
             self.write_tiles(gpu);
 
             self.input.hover_segment = None;
+
+            // Rebuild map silhouette for viewport detection.
+            self.game_nav.update_map(&self.data.map);
         }
     }
 
     pub fn tick(&mut self, gpu: &Gpu) {
         self.camera.tick();
+
+        // Game navigation: sync game viewport with solver viewport.
+        self.game_nav.enabled = self.ui_state.game_nav_enabled;
+        let solver_center = *self.camera.origin;
+        let mouse_abs = Some((
+            self.input.mouse_position.x as i32,
+            self.input.mouse_position.y as i32,
+        ));
+        let mouse_idle = !self.input.grab_move && !self.input.grab_rotate;
+        self.game_nav.tick(solver_center, mouse_abs, mouse_idle);
 
         self.file_watcher.handle_file_dialog();
         self.file_watcher.reload_file_if_changed();
