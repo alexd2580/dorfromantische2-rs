@@ -47,7 +47,7 @@ impl Form {
             (Form::Size3, Terrain::Forest) => 17,
             // TODO
             (Form::JunctionLeft, Terrain::Forest) => 20,
-            (Form::JunctionRight, Terrain::Forest) => 4,
+            (Form::JunctionRight, Terrain::Forest) => 20,
             (Form::ThreeWay, Terrain::Forest) => 20,
             (Form::Size4, Terrain::Forest) => 21,
             (Form::FanOut, Terrain::Forest) => 24,
@@ -78,11 +78,6 @@ impl Form {
     }
 }
 
-/// Whether a raw segment type ID represents a lake form.
-pub fn is_lake_segment_type(id: &raw_data::SegmentTypeId) -> bool {
-    matches!(id.0, 102 | 105 | 109 | 111)
-}
-
 impl From<&raw_data::SegmentTypeId> for Form {
     fn from(value: &raw_data::SegmentTypeId) -> Self {
         match value.0 {
@@ -99,13 +94,16 @@ impl From<&raw_data::SegmentTypeId> for Form {
             11 => Form::X,
             12 => Form::Size5,
             13 => Form::Size6,
-            // Lake forms map to their regular equivalents. The caller
-            // uses `is_lake_segment_type` to set terrain to Lake.
+            // Lake forms map to their regular equivalents (terrain
+            // override to Lake is handled in Segment::from).
             102 => Form::Size2,
             105 => Form::Size3,
             109 => Form::Size4,
             111 => Form::Size5,
-            other => panic!("Unexpected segment type value {other}"),
+            other => {
+                log::warn!("Unexpected segment type value {other}, defaulting to Size1");
+                Form::Size1
+            }
         }
     }
 }

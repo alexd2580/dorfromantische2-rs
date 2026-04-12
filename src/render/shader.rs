@@ -4,7 +4,7 @@ use bitfield_struct::bitfield;
 
 use crate::{
     best_placements::BestPlacements,
-    data::{Terrain, HEX_SIDES, IVEC2_, IVEC4_},
+    data::{Terrain, HEX_SIDES},
     group_assignments::GroupAssignments,
     map::Map,
     ui::input_state::InputState,
@@ -14,6 +14,9 @@ use crate::{
 use super::camera::Camera;
 use super::gpu::{Buffer, Gpu};
 
+const INT_: usize = 4;
+const IVEC2_: usize = 2 * INT_;
+const IVEC4_: usize = 4 * INT_;
 const TILE_: usize = IVEC4_ + IVEC2_ + IVEC2_;
 
 #[bitfield(u32, order=Lsb)]
@@ -43,21 +46,20 @@ struct PackedTile {
 ///
 /// `ptr` must point to a buffer of at least `byte_size(map)` bytes,
 /// be valid for writes, and be properly aligned for `i32` / `PackedTile`.
-#[allow(clippy::similar_names, clippy::cast_ptr_alignment)]
-pub unsafe fn write_map_to(
+pub(crate) unsafe fn write_map_to(
     ptr: *mut u8,
     map: &Map,
     groups: &GroupAssignments,
     best_placements: &BestPlacements,
 ) {
-    let iptr = ptr.cast::<i32>();
+    let header = ptr.cast::<i32>();
 
-    *iptr.add(0) = map.index_offset.x;
-    *iptr.add(1) = map.index_offset.y;
-    *iptr.add(2) = map.index_size.x;
-    *iptr.add(3) = map.index_size.y;
+    *header.add(0) = map.index_offset.x;
+    *header.add(1) = map.index_offset.y;
+    *header.add(2) = map.index_size.x;
+    *header.add(3) = map.index_size.y;
 
-    let tiles_ptr = iptr.add(4).cast::<PackedTile>();
+    let tiles_ptr = header.add(4).cast::<PackedTile>();
     for (index, maybe_segments) in map.tile_index.iter().enumerate() {
         let tile = &mut *tiles_ptr.add(index);
 
@@ -96,11 +98,9 @@ pub unsafe fn write_map_to(
     }
 }
 
-#[allow(clippy::identity_op)]
-// We use `* 1` to be explicitly explicit.
 pub fn byte_size_for_n_tiles(num_tiles: usize) -> usize {
     // Offset + Size + Tiles (at least one...)
-    1 * IVEC2_ + 1 * IVEC2_ + num_tiles.max(1) * TILE_
+    IVEC2_ + IVEC2_ + num_tiles.max(1) * TILE_
 }
 
 pub fn byte_size(map: &Map) -> usize {
@@ -152,11 +152,7 @@ struct PackedView {
     _pad2: [i32; 2],
 }
 
-#[allow(
-    clippy::cast_ptr_alignment,
-    clippy::similar_names,
-    clippy::too_many_arguments
-)]
+#[allow(clippy::too_many_arguments)]
 pub fn write_view(
     buffer: &Buffer,
     gpu: &Gpu,
@@ -183,7 +179,7 @@ pub fn write_view(
         view.origin = (camera.origin.x, camera.origin.y);
         view.rotation = camera.rotation;
         view.inv_scale = *camera.inv_scale;
-        view.hover_pos = (input.hover_pos.x, input.hover_pos.y);
+        view.hover_pos = (input.hover_pos.x(), input.hover_pos.y());
         view.hover_rotation = input.hover_rotation as i32;
         view.hover_group = input
             .hover_group
@@ -203,7 +199,7 @@ pub fn write_view(
         view.ghost_segments_2 = (0, 0);
         if ui_state.tooltip_mode == crate::ui::ui_state::TooltipMode::Placement {
             if let Some(score) = best_placements.find_nearest(input.hover_pos, 3) {
-                view.ghost_pos = (score.pos.x, score.pos.y);
+                view.ghost_pos = (score.pos.x(), score.pos.y());
                 view.ghost_rotation = score.rotation as i32;
                 view.ghost_active = 1;
                 // Pack next tile segments.

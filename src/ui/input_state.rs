@@ -1,6 +1,10 @@
-use glam::{IVec2, Vec2};
+use glam::Vec2;
 
-use crate::{data::Rotation, group::GroupIndex, map::SegmentIndex};
+use crate::{
+    data::{HexPos, Rotation},
+    group::GroupIndex,
+    map::SegmentIndex,
+};
 
 /// Input and mouse state extracted from App.
 #[derive(Default)]
@@ -12,7 +16,7 @@ pub struct InputState {
     /// Whether the right mouse button is held.
     pub grab_rotate: bool,
     /// World hover position of mouse.
-    pub hover_pos: IVec2,
+    pub hover_pos: HexPos,
     /// Hovered rotation.
     pub hover_rotation: Rotation,
     /// Hovered segment index (if present).
@@ -31,7 +35,7 @@ mod tests {
         assert_eq!(state.mouse_position, Vec2::ZERO);
         assert!(!state.grab_move);
         assert!(!state.grab_rotate);
-        assert_eq!(state.hover_pos, IVec2::ZERO);
+        assert_eq!(state.hover_pos, HexPos::ZERO);
         assert_eq!(state.hover_rotation, 0);
         assert!(state.hover_segment.is_none());
         assert!(state.hover_group.is_none());

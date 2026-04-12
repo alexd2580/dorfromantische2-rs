@@ -6,7 +6,7 @@ use dorfromantische2_rs::raw_data::SaveGame;
 use std::io::Cursor;
 
 fn load_biggame_bytes() -> Vec<u8> {
-    std::fs::read("biggame.sav").expect("biggame.sav not found")
+    std::fs::read("tests/fixtures/biggame.sav").expect("tests/fixtures/biggame.sav not found")
 }
 
 fn parse_nrbf(data: &[u8]) -> nrbf_rs::value::Value {

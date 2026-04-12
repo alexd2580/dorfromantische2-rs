@@ -1,4 +1,5 @@
 pub mod best_placements;
+pub mod coords;
 pub mod data;
 pub mod game;
 pub mod group;

@@ -1,5 +1,5 @@
 use crate::best_placements::MAX_SHOWN_PLACEMENTS;
-use crate::data::Pos;
+use crate::data::HexPos;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TooltipMode {
@@ -12,6 +12,7 @@ pub enum TooltipMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuestDisplay {
     None,
+    Min,
     Easy,
     All,
 }
@@ -44,12 +45,15 @@ pub struct UiState {
     pub show_placements: [bool; MAX_SHOWN_PLACEMENTS],
     pub tooltip_mode: TooltipMode,
     pub show_biggest_groups: bool,
+    /// Currently focused/highlighted group (from clicking in the groups overlay).
+    pub focused_group: Option<usize>,
     pub show_tile_frequencies: bool,
     pub show_imperfect_tiles: bool,
     pub quest_display: QuestDisplay,
     pub sidebar_expanded: bool,
     /// The currently focused/highlighted placement position (from clicking a row).
-    pub focused_placement: Option<Pos>,
+    pub focused_placement: Option<HexPos>,
+    pub viewport_detect_enabled: bool,
     pub game_nav_enabled: bool,
 }
 
@@ -63,22 +67,24 @@ impl Default for UiState {
             highlight_hovered_group: false,
             show_placements: [false; MAX_SHOWN_PLACEMENTS],
             tooltip_mode: TooltipMode::Placement,
-            show_biggest_groups: true,
+            show_biggest_groups: false,
             show_tile_frequencies: false,
             show_imperfect_tiles: false,
-            quest_display: QuestDisplay::Easy,
+            quest_display: QuestDisplay::Min,
             sidebar_expanded: true,
             focused_placement: None,
+            focused_group: None,
+            viewport_detect_enabled: false,
             game_nav_enabled: false,
         }
     }
 }
 
 impl UiState {
-    pub fn parse_goto(&self) -> Option<Pos> {
+    pub fn parse_goto(&self) -> Option<HexPos> {
         let x = self.goto_x.parse::<i32>().ok()?;
         let y = self.goto_y.parse::<i32>().ok()?;
-        Some(Pos::new(x, y))
+        Some(HexPos::new(x, y))
     }
 }
 
@@ -110,7 +116,7 @@ mod tests {
             ..Default::default()
         };
         let pos = ui.parse_goto();
-        assert_eq!(pos, Some(Pos::new(42, -7)));
+        assert_eq!(pos, Some(HexPos::new(42, -7)));
     }
 
     #[test]

@@ -1,1 +1,15 @@
 /target
+
+# Generated images
+*.png
+!assets/**/*.png
+
+# Savegame files (large binaries)
+*.sav
+
+# Calibration outputs (overlay images, masks, etc.)
+calibration/overlay_*.png
+calibration/calibration_mask.png
+calibration/calibration_projected.png
+calibration/calibration_overlay.png
+step*.png

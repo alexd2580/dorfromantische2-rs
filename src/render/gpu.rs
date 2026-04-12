@@ -1,10 +1,8 @@
-use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 #[derive(Clone, Copy)]
-pub enum SizeOrContent<'a> {
+pub enum SizeOrContent {
     Size(u64),
-    _Content(&'a [u8]),
 }
 
 pub struct Buffer {
@@ -161,17 +159,6 @@ impl Gpu {
                     size,
                     mapped_at_creation: false,
                 });
-                Buffer { size, buffer }
-            }
-            SizeOrContent::_Content(contents) => {
-                let size = contents.len() as u64;
-                let buffer = self
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some(label),
-                        usage,
-                        contents,
-                    });
                 Buffer { size, buffer }
             }
         }

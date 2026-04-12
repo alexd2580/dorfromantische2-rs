@@ -14,7 +14,6 @@ impl EdgePattern {
 }
 
 pub struct TileFrequency {
-    #[allow(dead_code)]
     pub edges: EdgePattern,
     /// A representative set of segments for rendering this pattern.
     pub segments: Vec<Segment>,
@@ -33,9 +32,8 @@ impl TileFrequencies {
         let mut counts: HashMap<EdgePattern, (usize, Vec<Segment>)> = HashMap::new();
         let mut total_tiles = 0;
 
-        let index_len = map.tile_index.len();
-        for key in 0..index_len {
-            if let Some((base, count)) = map.tile_index[key] {
+        for &entry in &map.tile_index {
+            if let Some((base, count)) = entry {
                 if count == 0 {
                     continue;
                 }

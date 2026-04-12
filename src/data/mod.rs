@@ -14,20 +14,10 @@ pub use side::Side;
 pub use terrain::{EdgeMatch, Terrain};
 pub use tile_table::{quest_terrain, segments_from_quest_tile, segments_from_special_tile_id};
 
-use glam::IVec2;
+pub use crate::coords::HexPos;
 
 /// Number of sides on a hexagonal tile.
 pub const HEX_SIDES: usize = 6;
-
-pub const INT_: usize = 4;
-pub const IVEC2_: usize = 2 * INT_;
-pub const IVEC4_: usize = 4 * INT_;
-
-/// Use flat-top axial coordinates.
-/// x -> 2 o'clock
-/// y -> north
-/// Offset coordinates are stupid and complex.
-pub type Pos = IVec2;
 
 /// Hex tile rotation index (0..HEX_SIDES). 0 = north, increasing clockwise.
 pub type Rotation = usize;

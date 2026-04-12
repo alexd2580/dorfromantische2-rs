@@ -1,6 +1,5 @@
 //! Calibrate the game camera projection by matching a screenshot against the map silhouette.
 //! Run with: cargo run --no-default-features --example calibrate_camera
-#![allow(unused_assignments)]
 
 use dorfromantische2_rs::hex;
 use dorfromantische2_rs::map::Map;
@@ -59,7 +58,7 @@ fn render_silhouette(map: &Map, width: usize, height: usize, params: &CameraPara
 
     for pos in map.iter_tile_positions() {
         let world = hex::hex_to_world(pos);
-        if let Some((sx, sy)) = params.project(world, aspect) {
+        if let Some((sx, sy)) = params.project(world.0, aspect) {
             let px = (sx * width as f32) as i32;
             let py = (sy * height as f32) as i32;
             // Draw a small dot for each tile.
@@ -148,20 +147,12 @@ fn main() {
     // Find the big lake area — the screenshot is near the southern part of the map.
     // From earlier analysis, big lake is around hex (30, -100).
     // World coords: hex_to_world((30, -100)) = (45, -147.2)
-    let lake_center = hex::hex_to_world(glam::IVec2::new(30, -100));
+    let lake_center = hex::hex_to_world(dorfromantische2_rs::data::HexPos::new(30, -100));
     println!(
         "Lake center (world): ({:.1}, {:.1})",
-        lake_center.x, lake_center.y
+        lake_center.x(),
+        lake_center.y()
     );
-
-    // Initial guess for camera parameters.
-    let mut best_params = CameraParams {
-        pitch: 49.0_f32.to_radians(),
-        yaw: 0.0,
-        fov_y: 47.0_f32.to_radians(),
-        look_at: lake_center,
-        distance: 350.0,
-    };
 
     // Downscale for faster correlation.
     let scale = 4;
@@ -177,26 +168,20 @@ fn main() {
         buf
     };
 
-    // Grid search over parameters.
-    let mut best_score = f32::NEG_INFINITY;
-
     println!("Starting grid search...");
 
     // Mask out UI areas in screenshot (corners).
     let mask_ui = |mask: &mut Vec<u8>, w: usize, h: usize| {
-        // Top-right: score display.
         for y in 0..h / 10 {
             for x in (w * 7 / 10)..w {
                 mask[y * w + x] = 0;
             }
         }
-        // Bottom-right: next tile + tile count.
         for y in (h * 7 / 10)..h {
             for x in (w * 7 / 10)..w {
                 mask[y * w + x] = 0;
             }
         }
-        // Top-left: compass.
         for y in 0..h / 10 {
             for x in 0..w / 10 {
                 mask[y * w + x] = 0;
@@ -205,15 +190,14 @@ fn main() {
     };
     mask_ui(&mut screenshot_small, cw, ch);
 
-    // Start from best known parameters.
-    best_params = CameraParams {
+    let mut best_params = CameraParams {
         pitch: 49.0_f32.to_radians(),
         yaw: 0.0,
         fov_y: 47.0_f32.to_radians(),
         look_at: Vec2::new(130.0, -2.2),
         distance: 350.0,
     };
-    best_score = {
+    let mut best_score = {
         let sil = render_silhouette(&map, cw, ch, &best_params);
         correlate(&screenshot_small, &sil, cw, ch)
     };

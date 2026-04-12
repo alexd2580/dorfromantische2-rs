@@ -2,13 +2,13 @@
 //! capturing a screenshot, binarizing it, unprojecting through the game
 //! camera, and template-matching against a precomputed map silhouette.
 
-use glam::Vec2;
 use opencv::core as cv_core;
 use opencv::imgproc;
 
 use super::game_camera::GameCamera;
+use crate::coords::{ScreenPos, WorldPos};
+use crate::data::HexPos;
 use crate::hex;
-use crate::map::Map;
 
 /// How many hex tiles fit across the viewport horizontally.
 /// Calibrated empirically from overlay matching.
@@ -25,14 +25,8 @@ pub struct MapSilhouette {
 }
 
 impl MapSilhouette {
-    #[allow(dead_code)]
-    pub fn from_map(map: &Map) -> Self {
-        let positions: Vec<glam::IVec2> = map.iter_tile_positions().collect();
-        Self::from_positions(&positions)
-    }
-
     /// Render the map as a top-down silhouette with padding for edge viewports.
-    pub fn from_positions(positions: &[glam::IVec2]) -> Self {
+    pub fn from_positions(positions: &[HexPos]) -> Self {
         let mut min_x = f32::MAX;
         let mut max_x = f32::MIN;
         let mut min_y = f32::MAX;
@@ -40,10 +34,10 @@ impl MapSilhouette {
 
         for &pos in positions {
             let world = hex::hex_to_world(pos);
-            min_x = min_x.min(world.x);
-            max_x = max_x.max(world.x);
-            min_y = min_y.min(world.y);
-            max_y = max_y.max(world.y);
+            min_x = min_x.min(world.x());
+            max_x = max_x.max(world.x());
+            min_y = min_y.min(world.y());
+            max_y = max_y.max(world.y());
         }
 
         let margin = 2.0;
@@ -68,8 +62,8 @@ impl MapSilhouette {
         let r_sq = r * r;
         for &pos in positions {
             let world = hex::hex_to_world(pos);
-            let cx = ((world.x - min_x) * ppu) as i32;
-            let cy = ((max_y - world.y) * ppu) as i32;
+            let cx = ((world.x() - min_x) * ppu) as i32;
+            let cy = ((max_y - world.y()) * ppu) as i32;
             for dy in -r..=r {
                 for dx in -r..=r {
                     if dx * dx + dy * dy <= r_sq {
@@ -96,21 +90,23 @@ impl MapSilhouette {
 
 /// Detect the game viewport position from a screenshot.
 /// Returns the world-space center of the detected viewport, or None.
+/// Result of viewport detection: the detected center and the screenshot dimensions.
+pub struct DetectResult {
+    pub center: WorldPos,
+    pub screen_size: (u32, u32),
+}
+
 pub fn detect_viewport(
     screenshot: &image::RgbImage,
     map_sil: &MapSilhouette,
     cam: &GameCamera,
-) -> Option<Vec2> {
+) -> Option<DetectResult> {
     let (sw, sh) = (screenshot.width() as usize, screenshot.height() as usize);
-    eprintln!("detect: screenshot {}x{}", sw, sh);
-
-    // Use actual screenshot dimensions for projection.
-    let mut cam = cam.clone();
-    cam.screen_width = sw as u32;
-    cam.screen_height = sh as u32;
+    let screen_size = (sw as u32, sh as u32);
+    log::debug!("detect: screenshot {}x{}", sw, sh);
 
     let mask = binarize_screenshot(screenshot);
-    let up = unproject_mask(&mask, sw, sh, &cam)?;
+    let up = unproject_mask(&mask, sw, sh, cam, screen_size)?;
 
     let target_w = TILES_ACROSS * 1.5 * map_sil.pixels_per_unit;
     let scale = target_w / up.width as f32;
@@ -144,7 +140,7 @@ pub fn detect_viewport(
     let cx = map_sil.min_x + (ox as f32 + center_in_tmpl_x) / map_sil.pixels_per_unit;
     let cy = map_sil.max_y - (oy as f32 + center_in_tmpl_y) / map_sil.pixels_per_unit;
 
-    eprintln!(
+    log::debug!(
         "detect: unproj {}x{} min_x={:.1} max_y={:.1} ppu={:.2} | tmpl {}x{} scale={:.3} | \
          center_in_unproj=({:.1},{:.1}) center_in_tmpl=({:.1},{:.1}) | \
          offset=({},{}) | result=({:.1},{:.1})",
@@ -166,7 +162,10 @@ pub fn detect_viewport(
         cy,
     );
 
-    Some(Vec2::new(cx, cy))
+    Some(DetectResult {
+        center: WorldPos::new(cx, cy),
+        screen_size,
+    })
 }
 
 fn binarize_screenshot(img: &image::RgbImage) -> Vec<u8> {
@@ -237,24 +236,33 @@ struct UnprojResult {
     ppu: f32,
 }
 
-fn unproject_mask(mask: &[u8], sw: usize, sh: usize, cam: &GameCamera) -> Option<UnprojResult> {
+fn unproject_mask(
+    mask: &[u8],
+    sw: usize,
+    sh: usize,
+    cam: &GameCamera,
+    screen_size: (u32, u32),
+) -> Option<UnprojResult> {
     let corners = [
-        Vec2::new(0.0, 0.0),
-        Vec2::new(1.0, 0.0),
-        Vec2::new(0.0, 1.0),
-        Vec2::new(1.0, 1.0),
+        ScreenPos::new(0.0, 0.0),
+        ScreenPos::new(1.0, 0.0),
+        ScreenPos::new(0.0, 1.0),
+        ScreenPos::new(1.0, 1.0),
     ];
-    let world_corners: Vec<Vec2> = corners.iter().map(|&s| cam.screen_to_world(s)).collect();
+    let world_corners: Vec<WorldPos> = corners
+        .iter()
+        .map(|&s| cam.screen_to_world(s, screen_size))
+        .collect();
 
     let mut min_x = f32::MAX;
     let mut max_x = f32::MIN;
     let mut min_y = f32::MAX;
     let mut max_y = f32::MIN;
     for &c in &world_corners {
-        min_x = min_x.min(c.x);
-        max_x = max_x.max(c.x);
-        min_y = min_y.min(c.y);
-        max_y = max_y.max(c.y);
+        min_x = min_x.min(c.x());
+        max_x = max_x.max(c.x());
+        min_y = min_y.min(c.y());
+        max_y = max_y.max(c.y());
     }
 
     let margin = 2.0;
@@ -280,10 +288,10 @@ fn unproject_mask(mask: &[u8], sw: usize, sh: usize, cam: &GameCamera) -> Option
 
     for py in 0..h {
         for px in 0..w {
-            let world = Vec2::new(min_x + px as f32 / ppu, max_y - py as f32 / ppu);
-            if let Some(screen) = cam.world_to_screen(world) {
-                let sx = (screen.x * sw as f32) as i32;
-                let sy = (screen.y * sh as f32) as i32;
+            let world = WorldPos::new(min_x + px as f32 / ppu, max_y - py as f32 / ppu);
+            if let Some(screen) = cam.world_to_screen(world, screen_size) {
+                let sx = (screen.0.x * sw as f32) as i32;
+                let sy = (screen.0.y * sh as f32) as i32;
                 if sx >= 0 && sx < sw as i32 && sy >= 0 && sy < sh as i32 {
                     let si = sy as usize * sw + sx as usize;
                     if screen_cov[si] > 0 {
@@ -344,7 +352,7 @@ fn find_best_offset(
         return None;
     }
     if map_img.len() != mw * mh || template.len() != tw * th || mask.len() != tw * th {
-        eprintln!("find_best_offset: size mismatch map={}x{}={} got {}, tmpl={}x{}={} got {}, mask got {}",
+        log::error!("find_best_offset: size mismatch map={}x{}={} got {}, tmpl={}x{}={} got {}, mask got {}",
             mw, mh, mw*mh, map_img.len(), tw, th, tw*th, template.len(), mask.len());
         return None;
     }

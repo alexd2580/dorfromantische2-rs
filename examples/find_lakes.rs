@@ -14,7 +14,7 @@ fn main() {
         std::collections::HashSet::new();
     for seg in &map.segments {
         if seg.terrain == Terrain::Lake {
-            lake_positions.insert((seg.pos.x, seg.pos.y));
+            lake_positions.insert((seg.pos.x(), seg.pos.y()));
         }
     }
     let mut lake_positions: Vec<_> = lake_positions.into_iter().collect();
@@ -30,8 +30,8 @@ fn main() {
     let mut min_y = i32::MAX;
     let mut max_y = i32::MIN;
     for pos in map.iter_tile_positions() {
-        min_y = min_y.min(pos.y);
-        max_y = max_y.max(pos.y);
+        min_y = min_y.min(pos.y());
+        max_y = max_y.max(pos.y());
     }
     println!("\nMap Y range: {min_y} to {max_y}");
 
@@ -40,15 +40,15 @@ fn main() {
     println!("\nSouthern tiles (y < {south_bound}):");
     let mut southern: Vec<_> = map
         .iter_tile_positions()
-        .filter(|p| p.y < south_bound)
+        .filter(|p| p.y() < south_bound)
         .collect();
-    southern.sort_by_key(|p| (p.y, p.x));
+    southern.sort_by_key(|p| (p.y(), p.x()));
     for pos in &southern {
         let has_lake = map.segments[map.tile_index[map.tile_key(*pos).unwrap()].unwrap().0..]
             .iter()
             .take(6)
             .any(|s| s.terrain == Terrain::Lake);
         let marker = if has_lake { "LAKE" } else { "    " };
-        println!("  ({}, {}) {marker}", pos.x, pos.y);
+        println!("  ({}, {}) {marker}", pos.x(), pos.y());
     }
 }

@@ -2,29 +2,34 @@
 //! by capturing screenshots, determining the game viewport position, and
 //! simulating mouse drag to pan the game view.
 
-#![allow(dead_code)]
-
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use enigo::{Button, Coordinate, Direction, Enigo, Mouse, Settings};
 use glam::Vec2;
+use niri_ipc::socket::Socket;
+
+use crate::data::HexPos;
+use niri_ipc::{Action, Request, Response};
 
 use super::game_camera::GameCamera;
 use super::screenshot;
-use super::viewport_detect::{self, MapSilhouette};
+use super::viewport_detect::{self, DetectResult, MapSilhouette};
+use crate::coords::WorldPos;
 use crate::map::Map;
 
 /// State for tracking viewport changes and triggering game navigation.
 pub struct GameNav {
     pub camera: GameCamera,
-    last_solver_center: Vec2,
+    last_solver_center: WorldPos,
     last_change: Instant,
     pending: bool,
     /// Estimated game viewport center (world coords).
-    game_center: Option<Vec2>,
+    game_center: Option<WorldPos>,
     settle_time: Duration,
     pub enabled: bool,
+    /// Whether periodic screenshot-based viewport detection is active.
+    pub detect_enabled: bool,
     /// Solver's mouse position (absolute screen pixels) for restoration after drag.
     saved_mouse: Option<(i32, i32)>,
     /// Precomputed map silhouette for viewport detection (shared with bg thread).
@@ -34,25 +39,28 @@ pub struct GameNav {
     /// Interval between automatic viewport detections.
     detect_interval: Duration,
     /// Result from background detection thread.
-    detect_result: Arc<Mutex<Option<Vec2>>>,
+    detect_result: Arc<Mutex<Option<DetectResult>>>,
     /// Whether a detection is currently running.
     detect_running: Arc<Mutex<bool>>,
     /// Status message for the UI.
     pub detect_status: String,
     /// Pending map silhouette being built in background.
     pending_silhouette: Option<Arc<Mutex<Option<MapSilhouette>>>>,
+    /// Game screen dimensions (width, height) from the last screenshot.
+    pub screen_size: (u32, u32),
 }
 
 impl Default for GameNav {
     fn default() -> Self {
         Self {
             camera: GameCamera::default(),
-            last_solver_center: Vec2::ZERO,
+            last_solver_center: WorldPos::ZERO,
             last_change: Instant::now(),
             pending: false,
             game_center: None,
             settle_time: Duration::from_millis(500),
             enabled: false,
+            detect_enabled: false,
             saved_mouse: None,
             map_silhouette: None,
             last_detect: Instant::now(),
@@ -61,6 +69,7 @@ impl Default for GameNav {
             detect_running: Arc::new(Mutex::new(false)),
             detect_status: "No map loaded".into(),
             pending_silhouette: None,
+            screen_size: (2560, 1440),
         }
     }
 }
@@ -70,7 +79,7 @@ impl GameNav {
     /// and whether the mouse is idle (no movement, no buttons held).
     pub fn tick(
         &mut self,
-        solver_center: Vec2,
+        solver_center: WorldPos,
         mouse_abs: Option<(i32, i32)>,
         mouse_idle: bool,
     ) -> bool {
@@ -88,15 +97,21 @@ impl GameNav {
         }
 
         // Check for completed background detection.
-        if let Some(center) = self.detect_result.lock().unwrap().take() {
-            self.game_center = Some(center);
-            self.camera.look_at = center;
-            self.detect_status = format!("Viewport: ({:.0}, {:.0})", center.x, center.y);
+        if let Some(result) = self.detect_result.lock().unwrap().take() {
+            self.game_center = Some(result.center);
+            self.camera.look_at = result.center;
+            self.screen_size = result.screen_size;
+            self.detect_status = format!(
+                "Viewport: ({:.0}, {:.0})",
+                result.center.x(),
+                result.center.y()
+            );
         }
 
-        // Kick off periodic detection in background.
+        // Kick off periodic detection in background (only when enabled).
         let is_running = *self.detect_running.lock().unwrap();
-        if self.map_silhouette.is_some()
+        if self.detect_enabled
+            && self.map_silhouette.is_some()
             && self.last_detect.elapsed() >= self.detect_interval
             && !is_running
         {
@@ -109,7 +124,7 @@ impl GameNav {
             return false;
         }
 
-        let moved = (solver_center - self.last_solver_center).length() > 1.0;
+        let moved = (solver_center.0 - self.last_solver_center.0).length() > 1.0;
         if moved {
             self.last_solver_center = solver_center;
             self.last_change = Instant::now();
@@ -131,7 +146,7 @@ impl GameNav {
             None => return,
         };
         let mut cam = self.camera.clone();
-        cam.look_at = Vec2::ZERO; // Unprojection must be origin-relative.
+        cam.look_at = WorldPos::ZERO; // Unprojection must be origin-relative.
         let result = Arc::clone(&self.detect_result);
         let running = Arc::clone(&self.detect_running);
 
@@ -159,41 +174,39 @@ impl GameNav {
                     *result.lock().unwrap() = Some(c);
                 }
                 Ok(None) => {
-                    eprintln!("GameNav: detection returned None");
+                    log::warn!("GameNav: detection returned None");
                 }
                 Err(e) => {
-                    eprintln!("GameNav: detection panicked: {:?}", e);
+                    log::error!("GameNav: detection panicked: {:?}", e);
                 }
             }
             *running.lock().unwrap() = false;
         });
     }
 
-    fn navigate_to(&mut self, target_world: Vec2) -> bool {
-        let game_center = self.game_center.unwrap_or(Vec2::ZERO);
-        let delta = target_world - game_center;
+    fn navigate_to(&mut self, target_world: WorldPos) -> bool {
+        let game_center = self.game_center.unwrap_or(WorldPos::ZERO);
+        let delta = target_world.0 - game_center.0;
         if delta.length() < 2.0 {
             return false;
         }
 
-        let screen_center = Vec2::new(
-            self.camera.screen_width as f32 / 2.0,
-            self.camera.screen_height as f32 / 2.0,
-        );
-        let current_pixel = self.camera.world_to_pixel(game_center);
-        let target_pixel = self.camera.world_to_pixel(target_world);
+        let ss = self.screen_size;
+        let screen_center = Vec2::new(ss.0 as f32 / 2.0, ss.1 as f32 / 2.0);
+        let current_pixel = self.camera.world_to_pixel(game_center, ss);
+        let target_pixel = self.camera.world_to_pixel(target_world, ss);
         let (current_pixel, target_pixel) = match (current_pixel, target_pixel) {
             (Some(c), Some(t)) => (c, t),
             _ => return false,
         };
 
         // Total drag vector (drag opposite to desired view movement).
-        let total_delta = current_pixel - target_pixel;
+        let total_delta = current_pixel.0 - target_pixel.0;
 
         let win_info = match find_windows() {
             Some(info) => info,
             None => {
-                eprintln!("GameNav: can't find game window");
+                log::warn!("GameNav: can't find game window");
                 return false;
             }
         };
@@ -208,8 +221,8 @@ impl GameNav {
 
         // Maximum drag distance per stroke (stay within window margins).
         let margin = 100.0;
-        let max_dx = self.camera.screen_width as f32 / 2.0 - margin;
-        let max_dy = self.camera.screen_height as f32 / 2.0 - margin;
+        let max_dx = ss.0 as f32 / 2.0 - margin;
+        let max_dy = ss.1 as f32 / 2.0 - margin;
 
         let mut remaining = total_delta;
         let mut success = true;
@@ -229,9 +242,10 @@ impl GameNav {
             let to_x = to.x as i32 + goff.0;
             let to_y = to.y as i32 + goff.1;
 
-            eprintln!(
+            log::debug!(
                 "GameNav: drag ({from_x},{from_y})->({to_x},{to_y}), remaining=({:.0},{:.0})",
-                remaining.x, remaining.y
+                remaining.x,
+                remaining.y
             );
 
             if !mouse_drag(from_x, from_y, to_x, to_y, 500) {
@@ -250,14 +264,11 @@ impl GameNav {
         // Restore mouse to solver window.
         if let Some((rx, ry)) = restore_pos {
             std::thread::sleep(Duration::from_millis(100));
-            run_ydotool(&[
-                "mousemove",
-                "--absolute",
-                "-x",
-                &rx.to_string(),
-                "-y",
-                &ry.to_string(),
-            ]);
+            if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
+                if let Err(e) = enigo.move_mouse(rx, ry, Coordinate::Abs) {
+                    log::error!("Failed to restore mouse position: {e}");
+                }
+            }
         }
 
         // Don't assume we arrived — let the next detection cycle determine
@@ -271,7 +282,7 @@ impl GameNav {
         let sil_result = Arc::new(Mutex::new(None::<MapSilhouette>));
         let sil_result_clone = Arc::clone(&sil_result);
         // Clone the positions we need — Map isn't Send.
-        let positions: Vec<glam::IVec2> = map.iter_tile_positions().collect();
+        let positions: Vec<HexPos> = map.iter_tile_positions().collect();
         std::thread::spawn(move || {
             let sil = MapSilhouette::from_positions(&positions);
             *sil_result_clone.lock().unwrap() = Some(sil);
@@ -281,7 +292,7 @@ impl GameNav {
 
     /// Capture a screenshot and detect the game viewport position.
     /// Returns the detected world center, or None.
-    pub fn detect_game_viewport(&mut self) -> Option<Vec2> {
+    pub fn detect_game_viewport(&mut self) -> Option<WorldPos> {
         let sil = self.map_silhouette.as_ref()?;
         let color_image = screenshot::capture_screen()?;
         let w = color_image.size[0] as u32;
@@ -294,18 +305,19 @@ impl GameNav {
             }
         }
         let mut cam = self.camera.clone();
-        cam.look_at = Vec2::ZERO;
-        let center = viewport_detect::detect_viewport(&rgb, sil, &cam)?;
-        self.game_center = Some(center);
-        self.camera.look_at = center;
-        Some(center)
+        cam.look_at = WorldPos::ZERO;
+        let result = viewport_detect::detect_viewport(&rgb, sil, &cam)?;
+        self.game_center = Some(result.center);
+        self.camera.look_at = result.center;
+        self.screen_size = result.screen_size;
+        Some(result.center)
     }
 
-    pub fn game_center(&self) -> Option<Vec2> {
+    pub fn game_center(&self) -> Option<WorldPos> {
         self.game_center
     }
 
-    pub fn set_game_center(&mut self, center: Vec2) {
+    pub fn set_game_center(&mut self, center: WorldPos) {
         self.game_center = Some(center);
     }
 }
@@ -317,17 +329,20 @@ struct WindowInfo {
 }
 
 fn find_windows() -> Option<WindowInfo> {
-    let win_out = Command::new("niri")
-        .args(["msg", "-j", "windows"])
-        .output()
-        .ok()?;
-    let windows: Vec<serde_json::Value> = serde_json::from_slice(&win_out.stdout).ok()?;
+    let mut socket = Socket::connect().ok()?;
+
+    // Get windows list.
+    let reply = socket.send(Request::Windows).ok()?;
+    let windows = match reply {
+        Ok(Response::Windows(w)) => w,
+        _ => return None,
+    };
 
     // Find game window.
     let (game_id, game_ws) = windows.iter().find_map(|w| {
-        let app_id = w.get("app_id").and_then(|a| a.as_str()).unwrap_or("");
+        let app_id = w.app_id.as_deref().unwrap_or("");
         if app_id.contains("1455840") {
-            Some((w.get("id")?.as_u64()?, w.get("workspace_id")?.as_u64()?))
+            Some((w.id, w.workspace_id?))
         } else {
             None
         }
@@ -335,48 +350,43 @@ fn find_windows() -> Option<WindowInfo> {
 
     // Find solver window (winit).
     let solver_ws = windows.iter().find_map(|w| {
-        let title = w.get("title").and_then(|t| t.as_str()).unwrap_or("");
+        let title = w.title.as_deref().unwrap_or("");
         if title.contains("winit") || title.contains("Dorfromantik viewer") {
-            w.get("workspace_id")?.as_u64()
+            w.workspace_id
         } else {
             None
         }
     });
 
-    // Get workspace -> output mapping.
-    let ws_out = Command::new("niri")
-        .args(["msg", "-j", "workspaces"])
-        .output()
-        .ok()?;
-    let workspaces: Vec<serde_json::Value> = serde_json::from_slice(&ws_out.stdout).ok()?;
+    // Get workspaces to map workspace_id -> output name.
+    let reply = socket.send(Request::Workspaces).ok()?;
+    let workspaces = match reply {
+        Ok(Response::Workspaces(ws)) => ws,
+        _ => return None,
+    };
 
     let ws_to_output = |ws_id: u64| -> Option<String> {
         workspaces.iter().find_map(|ws| {
-            if ws.get("id")?.as_u64()? == ws_id {
-                ws.get("output")?.as_str().map(|s| s.to_string())
+            if ws.id == ws_id {
+                ws.output.clone()
             } else {
                 None
             }
         })
     };
 
-    // Get output -> logical position.
-    let out_out = Command::new("niri")
-        .args(["msg", "-j", "outputs"])
-        .output()
-        .ok()?;
-    let outputs: serde_json::Value = serde_json::from_slice(&out_out.stdout).ok()?;
+    // Get outputs to map output name -> logical position.
+    let reply = socket.send(Request::Outputs).ok()?;
+    let outputs = match reply {
+        Ok(Response::Outputs(o)) => o,
+        _ => return None,
+    };
 
     let output_offset = |name: &str| -> (i32, i32) {
         outputs
             .get(name)
-            .and_then(|o| o.get("logical"))
-            .map(|l| {
-                (
-                    l.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
-                    l.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
-                )
-            })
+            .and_then(|o| o.logical.as_ref())
+            .map(|l| (l.x, l.y))
             .unwrap_or((0, 0))
     };
 
@@ -393,27 +403,31 @@ fn find_windows() -> Option<WindowInfo> {
 }
 
 fn focus_window(id: u64) {
-    let _ = Command::new("niri")
-        .args(["msg", "action", "focus-window", "--id", &id.to_string()])
-        .output();
+    if let Ok(mut socket) = Socket::connect() {
+        let action = Action::FocusWindow { id };
+        if let Err(e) = socket.send(Request::Action(action)) {
+            log::error!("Failed to focus window {id}: {e}");
+        }
+    }
 }
 
 fn mouse_drag(from_x: i32, from_y: i32, to_x: i32, to_y: i32, duration_ms: u32) -> bool {
+    let mut enigo = match Enigo::new(&Settings::default()) {
+        Ok(e) => e,
+        Err(e) => {
+            log::error!("Failed to create enigo instance: {e}");
+            return false;
+        }
+    };
+
     // Move to start.
-    if !run_ydotool(&[
-        "mousemove",
-        "--absolute",
-        "-x",
-        &from_x.to_string(),
-        "-y",
-        &from_y.to_string(),
-    ]) {
+    if enigo.move_mouse(from_x, from_y, Coordinate::Abs).is_err() {
         return false;
     }
     std::thread::sleep(Duration::from_millis(50));
 
-    // Middle button down (0x40 = down bit, 0x02 = middle button).
-    if !run_ydotool(&["click", "0x42"]) {
+    // Middle button down.
+    if enigo.button(Button::Middle, Direction::Press).is_err() {
         return false;
     }
     std::thread::sleep(Duration::from_millis(50));
@@ -425,45 +439,17 @@ fn mouse_drag(from_x: i32, from_y: i32, to_x: i32, to_y: i32, duration_ms: u32) 
         let t = i as f32 / steps as f32;
         let x = from_x as f32 + (to_x - from_x) as f32 * t;
         let y = from_y as f32 + (to_y - from_y) as f32 * t;
-        run_ydotool(&[
-            "mousemove",
-            "--absolute",
-            "-x",
-            &(x as i32).to_string(),
-            "-y",
-            &(y as i32).to_string(),
-        ]);
+        let _ = enigo.move_mouse(x as i32, y as i32, Coordinate::Abs);
         std::thread::sleep(step_delay);
     }
 
     std::thread::sleep(Duration::from_millis(50));
 
-    // Middle button up (0x80 = up bit, 0x02 = middle button).
-    if !run_ydotool(&["click", "0x82"]) {
+    // Middle button up.
+    if enigo.button(Button::Middle, Direction::Release).is_err() {
         return false;
     }
 
     std::thread::sleep(Duration::from_millis(50));
     true
-}
-
-fn run_ydotool(args: &[&str]) -> bool {
-    match Command::new("ydotool").args(args).output() {
-        Ok(output) => {
-            if !output.status.success() {
-                eprintln!(
-                    "ydotool {:?} failed: {}",
-                    args,
-                    String::from_utf8_lossy(&output.stderr)
-                );
-                false
-            } else {
-                true
-            }
-        }
-        Err(e) => {
-            eprintln!("Failed to run ydotool: {e}. Install: sudo pacman -S ydotool");
-            false
-        }
-    }
 }

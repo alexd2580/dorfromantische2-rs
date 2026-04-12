@@ -1,7 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 
 use crate::{
-    data::{GroupKind, Pos, Terrain, HEX_SIDES},
+    data::{GroupKind, HexPos, Terrain, HEX_SIDES},
     group::{Group, GroupIndex},
     map::{Map, SegmentIndex},
 };
@@ -11,14 +11,14 @@ pub struct GroupAnalyzer<'a> {
     map: &'a Map,
 
     /// List of valid tile positions to be processed.
-    pos_queue: VecDeque<Pos>,
+    pos_queue: VecDeque<HexPos>,
     /// All tiles that have been discovered.
-    discovered_pos: HashSet<Pos>,
+    discovered_pos: HashSet<HexPos>,
 
     segment_queue: Vec<SegmentIndex>,
     discovered_segments: HashSet<(SegmentIndex, GroupKind)>,
 
-    pub possible_placements: HashSet<Pos>,
+    pub possible_placements: HashSet<HexPos>,
     pub groups: Vec<Group>,
     pub assigned_groups: Vec<GroupIndex>,
 }
@@ -26,7 +26,7 @@ pub struct GroupAnalyzer<'a> {
 impl<'a> GroupAnalyzer<'a> {
     /// Register a new position for either discovery or as a possible placement.
     /// Returns whether the tile exists in the map.
-    fn handle_new_pos(&mut self, pos: Pos) -> bool {
+    fn handle_new_pos(&mut self, pos: HexPos) -> bool {
         if self.is_discovered(pos) {
             return true;
         }
@@ -138,7 +138,7 @@ impl<'a> GroupAnalyzer<'a> {
         });
     }
 
-    fn is_discovered(&self, pos: Pos) -> bool {
+    fn is_discovered(&self, pos: HexPos) -> bool {
         self.discovered_pos.contains(&pos)
     }
 
@@ -183,7 +183,7 @@ impl<'a> GroupAnalyzer<'a> {
 #[derive(Default)]
 pub struct GroupAssignments {
     /// Positions where tiles can be placed.
-    pub possible_placements: HashSet<Pos>,
+    pub possible_placements: HashSet<HexPos>,
     /// List of groups, with each being a set of segments.
     pub groups: Vec<Group>,
     /// Mapping of segment index to group index.
@@ -194,8 +194,8 @@ impl From<&Map> for GroupAssignments {
     fn from(map: &Map) -> Self {
         let mut analyzer = GroupAnalyzer {
             map,
-            pos_queue: VecDeque::from([Pos::new(0, 0)]),
-            discovered_pos: HashSet::from([Pos::new(0, 0)]),
+            pos_queue: VecDeque::from([HexPos::new(0, 0)]),
+            discovered_pos: HashSet::from([HexPos::new(0, 0)]),
 
             segment_queue: Vec::default(),
             discovered_segments: HashSet::default(),

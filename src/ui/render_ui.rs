@@ -23,6 +23,7 @@ fn render_top_panel(ui_state: &mut UiState, file_watcher: &mut FileWatcher, ctx:
             }
             ui.toggle_value(&mut ui_state.sidebar_expanded, "Visual settings");
             ui.toggle_value(&mut ui_state.show_tile_frequencies, "Tile frequencies");
+            ui.toggle_value(&mut ui_state.viewport_detect_enabled, "Detect viewport");
             ui.toggle_value(&mut ui_state.game_nav_enabled, "Nav sync");
         });
     });
@@ -139,6 +140,7 @@ fn render_side_panel(
             ui.label("Quest labels");
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut ui_state.quest_display, QuestDisplay::None, "None");
+                ui.selectable_value(&mut ui_state.quest_display, QuestDisplay::Min, "Min");
                 ui.selectable_value(&mut ui_state.quest_display, QuestDisplay::Easy, "Easy");
                 ui.selectable_value(&mut ui_state.quest_display, QuestDisplay::All, "All");
             });
@@ -175,7 +177,8 @@ fn render_side_panel(
                 ui.label("Bonus");
                 ui.label("Crowd");
                 ui.label("Fit%");
-                ui.label("Groups");
+                ui.label("Group");
+                ui.label("Quest");
                 ui.end_row();
 
                 let mut clicked_row = None;
@@ -217,6 +220,7 @@ fn render_side_panel(
                         }
                     };
 
+                    // Diff
                     let diff_color = if score.connection_difficulty > 0 {
                         Color32::from_rgb(220, 80, 80)
                     } else {
@@ -226,6 +230,7 @@ fn render_side_panel(
                         egui::RichText::new(format!("{}", score.connection_difficulty))
                             .color(diff_color),
                     );
+                    // Bonus
                     let bonus_color = if score.neighbor_bonus > 0 {
                         Color32::from_rgb(80, 200, 80)
                     } else {
@@ -234,12 +239,14 @@ fn render_side_panel(
                     cell(
                         egui::RichText::new(format!("{}", score.neighbor_bonus)).color(bonus_color),
                     );
+                    // Crowd
                     let crowd_color = if score.crowding > 0 {
                         Color32::from_rgb(220, 80, 80)
                     } else {
                         row_color
                     };
                     cell(egui::RichText::new(format!("{}", score.crowding)).color(crowd_color));
+                    // Fit%
                     let pct = score.fit_chance * 100.0;
                     if pct < 20.0 {
                         let color = if pct > 1.0 {
@@ -253,38 +260,97 @@ fn render_side_panel(
                     } else {
                         cell(egui::RichText::new(""));
                     }
-                    if score.group_effects.is_empty() {
-                        cell(egui::RichText::new(""));
-                    } else {
-                        let mut job = egui::text::LayoutJob::default();
-                        for (i, e) in score.group_effects.iter().enumerate() {
-                            if i > 0 {
-                                job.append(
-                                    ", ",
-                                    0.0,
-                                    egui::TextFormat::simple(
-                                        egui::FontId::proportional(12.0),
-                                        Color32::GRAY,
-                                    ),
+
+                    // Group/Quest/Progress columns — first effect on this row.
+                    let render_effect =
+                        |ui: &mut egui::Ui,
+                         e: &crate::best_placements::GroupEffect,
+                         row_color: Color32,
+                         clicked_row: &mut Option<(usize, crate::data::HexPos)>,
+                         rank: usize,
+                         pos: crate::data::HexPos| {
+                            let mut cell = |text: egui::RichText| {
+                                if ui.add(Label::new(text).sense(Sense::click())).clicked() {
+                                    *clicked_row = Some((rank, pos));
+                                }
+                            };
+                            // Group
+                            cell(
+                                egui::RichText::new(format!("{:?}#{}", e.terrain, e.rank))
+                                    .color(row_color),
+                            );
+
+                            if let Some(ref q) = e.quest {
+                                let type_label = match q.quest_type {
+                                    crate::map::QuestType::MoreThan => ">=",
+                                    crate::map::QuestType::Exact => "==",
+                                    crate::map::QuestType::Flag => "close",
+                                    crate::map::QuestType::Unknown => "?",
+                                };
+                                let remaining_after = q.target as i64 - q.segments_after as i64;
+
+                                let (text, color) = if q.would_close {
+                                    let met = match q.quest_type {
+                                        crate::map::QuestType::MoreThan => remaining_after <= 0,
+                                        crate::map::QuestType::Exact => remaining_after == 0,
+                                        crate::map::QuestType::Flag => true,
+                                        _ => false,
+                                    };
+                                    if met {
+                                        (
+                                            format!("{type_label} DONE"),
+                                            Color32::from_rgb(80, 200, 80),
+                                        )
+                                    } else {
+                                        (
+                                            format!("{type_label} CLOSES!"),
+                                            Color32::from_rgb(220, 80, 80),
+                                        )
+                                    }
+                                } else if q.quest_type == crate::map::QuestType::Exact
+                                    && remaining_after < 0
+                                {
+                                    (
+                                        format!("{type_label} OVER!"),
+                                        Color32::from_rgb(220, 80, 80),
+                                    )
+                                } else {
+                                    (format!("{type_label} {remaining_after} left"), row_color)
+                                };
+                                cell(egui::RichText::new(text).color(color));
+                            } else {
+                                let edges_after =
+                                    e.open_edges_before as i16 + e.open_edge_delta as i16;
+                                cell(
+                                    egui::RichText::new(format!("{edges_after} edges"))
+                                        .color(row_color),
                                 );
                             }
-                            let after = e.open_edges_before as i16 + e.open_edge_delta as i16;
-                            let color = if e.open_edge_delta < 0 {
-                                Color32::from_rgb(80, 200, 80)
-                            } else if e.open_edge_delta > 0 {
-                                Color32::from_rgb(220, 80, 80)
-                            } else {
-                                row_color
-                            };
-                            let fmt =
-                                egui::TextFormat::simple(egui::FontId::proportional(12.0), color);
-                            job.append(&format!("{:?}#{} {after}", e.terrain, e.rank), 0.0, fmt);
-                        }
-                        if ui.add(Label::new(job).sense(Sense::click())).clicked() {
-                            clicked_row = Some((rank, score.pos));
-                        }
+                        };
+
+                    // Only show group effects that have quests.
+                    let quest_effects: Vec<_> = score
+                        .group_effects
+                        .iter()
+                        .filter(|e| e.quest.is_some())
+                        .collect();
+
+                    if let Some(first) = quest_effects.first() {
+                        render_effect(ui, first, row_color, &mut clicked_row, rank, score.pos);
+                    } else {
+                        cell(egui::RichText::new(""));
+                        cell(egui::RichText::new(""));
                     }
                     ui.end_row();
+
+                    for e in quest_effects.iter().skip(1) {
+                        // Empty cells for Show, Pos, Edges, Diff, Bonus, Crowd, Fit%
+                        for _ in 0..7 {
+                            ui.label("");
+                        }
+                        render_effect(ui, e, row_color, &mut clicked_row, rank, score.pos);
+                        ui.end_row();
+                    }
                 }
                 if let Some((rank, pos)) = clicked_row {
                     camera.goto(pos);
@@ -307,29 +373,26 @@ fn render_side_panel(
                         Terrain::River,
                     ];
                     // Collect groups per terrain.
-                    let mut columns: Vec<(Terrain, Vec<&crate::group::Group>)> = Vec::new();
+                    let mut columns: Vec<(Terrain, Vec<(usize, &crate::group::Group)>)> =
+                        Vec::new();
                     for &terrain in &terrain_order {
                         let mut groups: Vec<_> = data
                             .group_assignments
                             .groups
                             .iter()
-                            .filter(|g| {
-                                g.terrain == terrain
-                                    && !g.is_closed()
-                                    && g.segment_indices.len() > 5
-                            })
+                            .enumerate()
+                            .filter(|(_, g)| g.terrain == terrain && !g.is_closed())
                             .collect();
-                        groups.sort_by(|a, b| b.unit_count.cmp(&a.unit_count));
+                        groups.sort_by(|a, b| b.1.unit_count.cmp(&a.1.unit_count));
                         if !groups.is_empty() {
                             columns.push((terrain, groups));
                         }
                     }
 
                     let max_rows = columns.iter().map(|(_, g)| g.len()).max().unwrap_or(0);
-                    let mut goto_group = None;
+                    let mut clicked_group = None;
 
                     egui::Grid::new("groups_table").show(ui, |ui| {
-                        // Header row.
                         for (terrain, _) in &columns {
                             ui.label(
                                 egui::RichText::new(format!("{terrain:?}"))
@@ -339,17 +402,23 @@ fn render_side_panel(
                         }
                         ui.end_row();
 
-                        // Data rows.
                         for row in 0..max_rows {
                             for (_, groups) in &columns {
-                                if let Some(group) = groups.get(row) {
-                                    let text = format!(
+                                if let Some((group_idx, group)) = groups.get(row) {
+                                    let is_focused = ui_state.focused_group == Some(*group_idx);
+                                    let color = if is_focused {
+                                        Color32::from_rgb(100, 150, 255)
+                                    } else {
+                                        Color32::WHITE
+                                    };
+                                    let text = egui::RichText::new(format!(
                                         "{} ({})",
                                         group.unit_count,
                                         group.open_edges.len()
-                                    );
+                                    ))
+                                    .color(color);
                                     if ui.add(Label::new(text).sense(Sense::click())).clicked() {
-                                        goto_group = Some(group.centroid);
+                                        clicked_group = Some((*group_idx, group.centroid));
                                     }
                                 } else {
                                     ui.label("");
@@ -358,8 +427,9 @@ fn render_side_panel(
                             ui.end_row();
                         }
                     });
-                    if let Some(world) = goto_group {
+                    if let Some((group_idx, world)) = clicked_group {
                         camera.goto_world(world);
+                        ui_state.focused_group = Some(group_idx);
                     }
                 });
             ui.add_space(10.0);
@@ -516,7 +586,7 @@ fn render_tooltip(data: &GameData, input: &InputState, ui_state: &UiState, ctx: 
         .show(ctx, |ui| {
             egui::Grid::new("tooltip_grid").show(ui, |ui| {
                 ui.label("Position");
-                ui.label(format!("{}, {}", input.hover_pos.x, input.hover_pos.y));
+                ui.label(format!("{}, {}", input.hover_pos.x(), input.hover_pos.y()));
                 ui.end_row();
 
                 ui.label("Terrain");
@@ -591,7 +661,7 @@ fn render_placement_detail(
 
     // Position the window near the placement, offset to the right.
     let pixel_pos = camera.hex_to_pixel(score.pos);
-    let window_pos = Pos2::new(pixel_pos.x + 30.0, pixel_pos.y - 100.0);
+    let window_pos = Pos2::new(pixel_pos.x() + 30.0, pixel_pos.y() - 100.0);
 
     egui::Area::new(egui::Id::new("placement_detail"))
         .fixed_pos(window_pos)
@@ -840,7 +910,7 @@ fn easy_quest_threshold(terrain: Terrain) -> i32 {
 fn render_group_quest_labels(
     data: &GameData,
     camera: &Camera,
-    ui_state: &UiState,
+    ui_state: &mut UiState,
     ctx: &egui::Context,
     visible_rect: egui::Rect,
 ) {
@@ -848,34 +918,44 @@ fn render_group_quest_labels(
         return;
     }
 
-    let easy_only = ui_state.quest_display == QuestDisplay::Easy;
+    let mode = ui_state.quest_display;
 
     for (group_idx, group) in data.group_assignments.groups.iter().enumerate() {
-        let active_quests: Vec<_> = group
+        let mut active_quests: Vec<_> = group
             .remaining_per_quest()
             .into_iter()
             .filter(|(q, remaining)| {
-                q.active && (!easy_only || *remaining <= easy_quest_threshold(q.terrain))
+                q.active
+                    && match mode {
+                        QuestDisplay::Min => true,
+                        QuestDisplay::Easy => *remaining <= easy_quest_threshold(q.terrain),
+                        QuestDisplay::All => true,
+                        QuestDisplay::None => false,
+                    }
             })
             .collect();
         if active_quests.is_empty() {
             continue;
         }
 
-        // Convert world centroid to pixel coordinates.
+        // Min mode: only show the quest with the smallest target value.
+        if mode == QuestDisplay::Min {
+            if let Some(min_quest) = active_quests.iter().min_by_key(|(q, _)| q.target_value) {
+                active_quests = vec![*min_quest];
+            }
+        }
+
         let centroid = camera.world_to_pixel(group.centroid);
 
-        // Skip if centroid is outside the visible (non-panel) area.
         let margin = 50.0;
-        if centroid.x < visible_rect.min.x - margin
-            || centroid.y < visible_rect.min.y - margin
-            || centroid.x > visible_rect.max.x + margin
-            || centroid.y > visible_rect.max.y + margin
+        if centroid.x() < visible_rect.min.x - margin
+            || centroid.y() < visible_rect.min.y - margin
+            || centroid.x() > visible_rect.max.x + margin
+            || centroid.y() > visible_rect.max.y + margin
         {
             continue;
         }
 
-        // Build the label text showing remaining count per quest.
         let text = active_quests
             .iter()
             .map(|(quest, remaining)| {
@@ -897,7 +977,7 @@ fn render_group_quest_labels(
         let id = egui::Id::new(("group_quest_label", group_idx));
         egui::Area::new(id)
             .order(egui::Order::Background)
-            .fixed_pos(Pos2::new(centroid.x, centroid.y))
+            .fixed_pos(Pos2::new(centroid.x(), centroid.y()))
             .interactable(false)
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style())
@@ -951,10 +1031,10 @@ fn render_biggest_groups(
             let centroid_px = camera.world_to_pixel(group.centroid);
 
             let margin = 50.0;
-            if centroid_px.x < visible_rect.min.x - margin
-                || centroid_px.y < visible_rect.min.y - margin
-                || centroid_px.x > visible_rect.max.x + margin
-                || centroid_px.y > visible_rect.max.y + margin
+            if centroid_px.x() < visible_rect.min.x - margin
+                || centroid_px.y() < visible_rect.min.y - margin
+                || centroid_px.x() > visible_rect.max.x + margin
+                || centroid_px.y() > visible_rect.max.y + margin
             {
                 continue;
             }
@@ -962,7 +1042,7 @@ fn render_biggest_groups(
             let radius_px = camera.world_dist_to_pixels(group.radius);
             let text = format!("{terrain:?} {}", group.unit_count);
             labels.push(GroupLabel {
-                center: Pos2::new(centroid_px.x, centroid_px.y),
+                center: Pos2::new(centroid_px.x(), centroid_px.y()),
                 radius_px,
                 text,
                 color: rank_colors[rank],
@@ -1098,10 +1178,27 @@ pub fn render_ui(
         ));
         painter.set_clip_rect(visible_rect);
         painter.circle_stroke(
-            Pos2::new(px.x, px.y),
+            Pos2::new(px.x(), px.y()),
             radius,
             egui::Stroke::new(3.0, Color32::from_rgb(80, 140, 255)),
         );
+    }
+    // Highlight focused group.
+    if let Some(group_idx) = ui_state.focused_group {
+        if let Some(group) = data.group_assignments.groups.get(group_idx) {
+            let centroid_px = camera.world_to_pixel(group.centroid);
+            let radius_px = camera.world_dist_to_pixels(group.radius).max(20.0);
+            let mut painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Middle,
+                egui::Id::new("focused_group_highlight"),
+            ));
+            painter.set_clip_rect(visible_rect);
+            painter.circle_stroke(
+                Pos2::new(centroid_px.x(), centroid_px.y()),
+                radius_px,
+                egui::Stroke::new(3.0, Color32::from_rgb(255, 200, 50)),
+            );
+        }
     }
     render_tile_frequencies(data, ui_state, ctx);
     render_next_tile(data, ctx);
@@ -1129,14 +1226,14 @@ fn render_imperfect_tiles(
 
     for &pos in &imperfect {
         let px = camera.hex_to_pixel(pos);
-        if px.x < visible_rect.min.x - radius
-            || px.y < visible_rect.min.y - radius
-            || px.x > visible_rect.max.x + radius
-            || px.y > visible_rect.max.y + radius
+        if px.x() < visible_rect.min.x - radius
+            || px.y() < visible_rect.min.y - radius
+            || px.x() > visible_rect.max.x + radius
+            || px.y() > visible_rect.max.y + radius
         {
             continue;
         }
-        painter.circle_filled(Pos2::new(px.x, px.y), radius, highlight);
+        painter.circle_filled(Pos2::new(px.x(), px.y()), radius, highlight);
     }
 }
 
@@ -1230,7 +1327,7 @@ fn render_placement_chance(
     };
 
     let pixel_pos = camera.hex_to_pixel(pos);
-    let window_pos = Pos2::new(pixel_pos.x + 30.0, pixel_pos.y - 60.0);
+    let window_pos = Pos2::new(pixel_pos.x() + 30.0, pixel_pos.y() - 60.0);
 
     egui::Area::new(egui::Id::new("placement_chance"))
         .fixed_pos(window_pos)
@@ -1280,14 +1377,14 @@ fn render_game_viewport_quad(
     // Compute the 4 corners of the game viewport in world coordinates.
     let gcam = &game_nav.camera;
     let corners_screen = [
-        glam::Vec2::new(0.0, 0.0),
-        glam::Vec2::new(1.0, 0.0),
-        glam::Vec2::new(1.0, 1.0),
-        glam::Vec2::new(0.0, 1.0),
+        crate::coords::ScreenPos::new(0.0, 0.0),
+        crate::coords::ScreenPos::new(1.0, 0.0),
+        crate::coords::ScreenPos::new(1.0, 1.0),
+        crate::coords::ScreenPos::new(0.0, 1.0),
     ];
-    let corners_world: Vec<glam::Vec2> = corners_screen
+    let corners_world: Vec<crate::coords::WorldPos> = corners_screen
         .iter()
-        .map(|s| gcam.screen_to_world(*s))
+        .map(|s| gcam.screen_to_world(*s, game_nav.screen_size))
         .collect();
 
     // Project to solver pixel coordinates.
@@ -1295,7 +1392,7 @@ fn render_game_viewport_quad(
         .iter()
         .map(|w| {
             let px = camera.world_to_pixel(*w);
-            Pos2::new(px.x, px.y)
+            Pos2::new(px.x(), px.y())
         })
         .collect();
 

@@ -45,7 +45,7 @@ impl FileChooseDialog {
 
 #[derive(Default)]
 pub struct MapLoader {
-    handle: Option<JoinHandle<(Map, GroupAssignments, BestPlacements)>>,
+    handle: Option<JoinHandle<Option<(Map, GroupAssignments, BestPlacements)>>>,
 }
 
 impl MapLoader {
@@ -58,40 +58,43 @@ impl MapLoader {
     fn load(&mut self, path: &Path) {
         if !self.in_progress() {
             let path = path.to_owned();
-            self.handle = Some(std::thread::spawn(|| {
-                // Load savegame.
-                let path = path;
-
+            self.handle = Some(std::thread::spawn(move || {
                 log::info!("Loading savegame: {}", path.display());
                 let start = std::time::Instant::now();
 
-                // Fugly retry mechanism.
-                let parsed = std::panic::catch_unwind(|| {
-                    let mut stream = File::open(&path).expect("Failed to open file");
+                let mut stream = match File::open(&path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        log::error!("Failed to open file {}: {e}", path.display());
+                        return None;
+                    }
+                };
+
+                // parse_nrbf can panic on malformed data; catch and report.
+                let parsed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     nrbf_rs::parse_nrbf(&mut stream)
-                })
-                .or_else(|_| {
-                    std::panic::catch_unwind(|| {
-                        let mut stream = File::open(&path).expect("Failed to open file");
-                        nrbf_rs::parse_nrbf(&mut stream)
-                    })
-                })
-                .or_else(|_| {
-                    std::panic::catch_unwind(|| {
-                        let mut stream = File::open(&path).expect("Failed to open file");
-                        nrbf_rs::parse_nrbf(&mut stream)
-                    })
-                })
-                .unwrap();
+                })) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        log::error!("NRBF parsing panicked for {}", path.display());
+                        return None;
+                    }
+                };
 
                 let tree_loaded = start.elapsed();
-                println!("NRBF Tree loaded in: {tree_loaded:?}");
+                log::info!("NRBF Tree loaded in: {tree_loaded:?}");
                 let start = std::time::Instant::now();
 
-                let savegame = raw_data::SaveGame::try_from(&parsed).unwrap();
+                let savegame = match raw_data::SaveGame::try_from(&parsed) {
+                    Ok(sg) => sg,
+                    Err(e) => {
+                        log::error!("Failed to parse savegame: {e}");
+                        return None;
+                    }
+                };
 
                 let save_loaded = start.elapsed();
-                println!("Savegame loaded in: {save_loaded:?}");
+                log::info!("Savegame loaded in: {save_loaded:?}");
                 let start = std::time::Instant::now();
 
                 let map = Map::from(&savegame);
@@ -99,16 +102,22 @@ impl MapLoader {
                 let freqs = crate::tile_frequency::TileFrequencies::from_map(&map);
                 let best_placements = BestPlacements::compute(&map, &groups, &freqs);
                 let map_loaded = start.elapsed();
-                println!("Map loaded in: {map_loaded:?}");
+                log::info!("Map loaded in: {map_loaded:?}");
 
-                (map, groups, best_placements)
+                Some((map, groups, best_placements))
             }));
         }
     }
 
     pub fn take_result(&mut self) -> Option<(Map, GroupAssignments, BestPlacements)> {
         if self.handle.as_ref().is_some_and(JoinHandle::is_finished) {
-            self.handle.take().unwrap().join().ok()
+            match self.handle.take().unwrap().join() {
+                Ok(result) => result,
+                Err(_) => {
+                    log::error!("Map loader thread panicked");
+                    None
+                }
+            }
         } else {
             None
         }

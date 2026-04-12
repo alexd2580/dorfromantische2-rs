@@ -11,9 +11,6 @@ path = "src/lib.rs"
 name = "dorfromantische2-rs"
 path = "src/main.rs"
 
-[patch.crates-io]
-cc = { git = "https://github.com/rust-lang/cc-rs.git", version = "1.0", tag = "1.0.79" }
-
 [dependencies]
 egui = "0.23.0"
 egui-wgpu = "0.23.0"
@@ -36,10 +33,12 @@ image = "0.24.7"
 rfd = "0.12.1"
 glam = "0.24.2"
 dirs = "5.0.1"
-opencv = "0.93.3"
+opencv = "0.98"
 bitfield-struct = "0.9.2"
 comfy-table = "7.2.2"
-serde_json = "1"
+libwayshot = "0.7"
+niri-ipc = "25.11"
+enigo = { version = "0.6", features = ["wayland"] }
 
 [features]
 default = []

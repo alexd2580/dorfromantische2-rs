@@ -13,21 +13,19 @@ use winit::{
 };
 
 mod app;
-mod best_placements;
-mod data;
 mod file_watcher;
-mod game;
 mod game_data;
-mod group;
-mod group_assignments;
-mod hex;
-mod map;
-mod raw_data;
 mod render;
-mod tile_frequency;
 mod ui;
 
-#[allow(for_loops_over_fallibles)]
+// Re-export shared modules from the library crate so that binary-only modules
+// can refer to them via `crate::` paths without re-declaring (and re-analyzing)
+// them, which would produce spurious dead-code warnings.
+pub use dorfromantische2_rs::{
+    best_placements, coords, data, game, group, group_assignments, hex, map, raw_data,
+    tile_frequency,
+};
+
 fn run(
     event_loop: EventLoop<()>,
     window: Window,
@@ -37,12 +35,6 @@ fn run(
     mut app: App,
 ) {
     event_loop.run(move |event, _, control_flow| {
-        // What the actual??
-        // Have the closure take ownership of the resources.
-        // `event_loop.run` never returns, therefore we must do this to ensure
-        // the resources are properly cleaned up.
-        // let _ = (&instance, &adapter, &shader, &pipeline_layout);
-
         *control_flow = ControlFlow::Poll;
 
         match event {
@@ -50,7 +42,7 @@ fn run(
                 let event_response = ui.on_event(&event);
 
                 if event_response.repaint {
-                    // window.request_redraw();
+                    window.request_redraw();
                 }
 
                 if event_response.consumed {
@@ -58,7 +50,6 @@ fn run(
                 }
 
                 match event {
-                    // WindowEvent::CursorMoved { position, .. } => {}
                     WindowEvent::MouseInput { button, state, .. } => {
                         match (button, state) {
                             (MouseButton::Left, ElementState::Pressed) => {
@@ -83,7 +74,9 @@ fn run(
                         } else {
                             winit::window::CursorGrabMode::Confined
                         };
-                        window.set_cursor_grab(grab_mode).unwrap();
+                        if let Err(e) = window.set_cursor_grab(grab_mode) {
+                            log::warn!("Failed to set cursor grab mode: {e}");
+                        }
                     }
                     WindowEvent::CursorMoved {
                         position: PhysicalPosition { x, y },
@@ -92,7 +85,13 @@ fn run(
                     WindowEvent::MouseWheel {
                         delta: MouseScrollDelta::LineDelta(_, y),
                         ..
-                    } => app.camera.on_scroll(y),
+                    } => {
+                        let mouse = crate::coords::PixelPos::new(
+                            app.input.mouse_position.x,
+                            app.input.mouse_position.y,
+                        );
+                        app.camera.on_scroll(y, mouse);
+                    }
                     WindowEvent::CloseRequested => {
                         *control_flow = ControlFlow::Exit;
                     }

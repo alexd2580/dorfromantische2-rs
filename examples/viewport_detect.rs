@@ -6,12 +6,13 @@
 //! 4. Cross-correlation to find offset
 //!
 //! Run with: cargo run --no-default-features --example viewport_detect -- calibration_02.png
+#![allow(clippy::too_many_arguments, dead_code)]
 
+use dorfromantische2_rs::coords::{ScreenPos, WorldPos};
 use dorfromantische2_rs::game::game_camera::GameCamera;
 use dorfromantische2_rs::hex;
 use dorfromantische2_rs::map::Map;
 use dorfromantische2_rs::raw_data::SaveGame;
-use glam::Vec2;
 use opencv::core as cv_core;
 use opencv::imgproc;
 use opencv::prelude::*;
@@ -44,10 +45,10 @@ fn main() {
         let mut my1 = f32::MIN;
         for pos in map.iter_tile_positions() {
             let w = hex::hex_to_world(pos);
-            mx0 = mx0.min(w.x);
-            mx1 = mx1.max(w.x);
-            my0 = my0.min(w.y);
-            my1 = my1.max(w.y);
+            mx0 = mx0.min(w.x());
+            mx1 = mx1.max(w.x());
+            my0 = my0.min(w.y());
+            my1 = my1.max(w.y());
         }
         2000.0 / (mx1 - mx0).max(my1 - my0)
     };
@@ -86,7 +87,6 @@ fn main() {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Score a set of camera parameters: unproject, scale, correlate.
 fn score_params(
     mask: &[u8],
@@ -95,21 +95,11 @@ fn score_params(
     map_sil: &[u8],
     map_bounds: &Bounds,
     map_ppu: f32,
-    pitch: f32,
-    fov_y: f32,
-    distance: f32,
+    cam: &GameCamera,
     tiles_across: f32,
 ) -> f32 {
-    let cam = GameCamera {
-        pitch,
-        yaw: 0.0,
-        fov_y,
-        distance,
-        look_at: Vec2::ZERO,
-        screen_width: sw as u32,
-        screen_height: sh as u32,
-    };
-    let (unprojected, coverage, unproj_bounds) = unproject_mask(mask, sw, sh, &cam);
+    let screen_size = (sw as u32, sh as u32);
+    let (unprojected, coverage, unproj_bounds) = unproject_mask(mask, sw, sh, cam, screen_size);
     if unproj_bounds.width == 0 || unproj_bounds.height == 0 {
         return -1.0;
     }
@@ -166,6 +156,13 @@ fn run_calibration(
     let mut distance = 343.0_f32;
     let mut tiles_across = 37.1_f32;
 
+    let make_cam = |pitch, fov_y, distance| GameCamera {
+        pitch,
+        yaw: 0.0,
+        fov_y,
+        distance,
+        look_at: WorldPos::ZERO,
+    };
     let mut best_score = score_params(
         mask,
         sw,
@@ -173,9 +170,7 @@ fn run_calibration(
         map_sil,
         map_bounds,
         map_ppu,
-        pitch,
-        fov_y,
-        distance,
+        &make_cam(pitch, fov_y, distance),
         tiles_across,
     );
     println!(
@@ -222,7 +217,16 @@ fn run_calibration(
                 continue;
             }
 
-            let s = score_params(mask, sw, sh, map_sil, map_bounds, map_ppu, p, f, d, t);
+            let s = score_params(
+                mask,
+                sw,
+                sh,
+                map_sil,
+                map_bounds,
+                map_ppu,
+                &make_cam(p, f, d),
+                t,
+            );
             if s > best_score {
                 best_score = s;
                 pitch = p;
@@ -276,11 +280,10 @@ fn run_calibration(
         yaw: 0.0,
         fov_y,
         distance,
-        look_at: Vec2::ZERO,
-        screen_width: sw as u32,
-        screen_height: sh as u32,
+        look_at: WorldPos::ZERO,
     };
-    let (unprojected, coverage, unproj_bounds) = unproject_mask(mask, sw, sh, &cam);
+    let screen_size = (sw as u32, sh as u32);
+    let (unprojected, coverage, unproj_bounds) = unproject_mask(mask, sw, sh, &cam, screen_size);
     save_gray(
         "step2_unprojected.png",
         &unprojected,
@@ -333,8 +336,8 @@ fn run_calibration(
     let center_x = map_bounds.min_x + center_px_x / map_ppu;
     let center_y = map_bounds.max_y - center_px_y / map_ppu;
     println!("  center:       ({:.1}, {:.1})", center_x, center_y);
-    let hex_pos = hex::world_to_hex(Vec2::new(center_x, center_y));
-    println!("  hex:          ({}, {})", hex_pos.x, hex_pos.y);
+    let hex_pos = hex::world_to_hex(WorldPos::new(center_x, center_y));
+    println!("  hex:          ({}, {})", hex_pos.x(), hex_pos.y());
 
     save_overlay(
         "step5_overlay.png",
@@ -403,11 +406,10 @@ fn run_grid_search(
                         yaw: 0.0,
                         fov_y: fov,
                         distance: 343.0,
-                        look_at: Vec2::ZERO,
-                        screen_width: *sw as u32,
-                        screen_height: *sh as u32,
+                        look_at: WorldPos::ZERO,
                     };
-                    let (unproj, cov, ub) = unproject_mask(mask, *sw, *sh, &cam);
+                    let screen_size = (*sw as u32, *sh as u32);
+                    let (unproj, cov, ub) = unproject_mask(mask, *sw, *sh, &cam, screen_size);
                     if ub.width == 0 || ub.height == 0 {
                         skip = true;
                         break;
@@ -486,11 +488,10 @@ fn run_sweep_pitch(map_sil: &[u8], map_bounds: &Bounds, map_ppu: f32) {
                 yaw: 0.0,
                 fov_y: fov,
                 distance: dist,
-                look_at: Vec2::ZERO,
-                screen_width: *sw as u32,
-                screen_height: *sh as u32,
+                look_at: WorldPos::ZERO,
             };
-            let (unproj, cov, ub) = unproject_mask(mask, *sw, *sh, &cam);
+            let screen_size = (*sw as u32, *sh as u32);
+            let (unproj, cov, ub) = unproject_mask(mask, *sw, *sh, &cam, screen_size);
             if ub.width == 0 || ub.height == 0 {
                 continue;
             }
@@ -514,10 +515,13 @@ fn run_sweep_pitch(map_sil: &[u8], map_bounds: &Bounds, map_ppu: f32) {
             );
             let cx = map_bounds.min_x + (ox as f32 + tw as f32 / 2.0) / map_ppu;
             let cy = map_bounds.max_y - (oy as f32 + th as f32 / 2.0) / map_ppu;
-            let hex = hex::world_to_hex(Vec2::new(cx, cy));
+            let hex = hex::world_to_hex(WorldPos::new(cx, cy));
             println!(
                 "tiles={tiles:.0} {img_name}: score={score:.0} hex=({},{}) tmpl={}x{}",
-                hex.x, hex.y, tw, th
+                hex.x(),
+                hex.y(),
+                tw,
+                th
             );
             let out = format!("overlay_{img_name}_tiles{tiles:.0}.png");
             save_overlay(
@@ -572,11 +576,10 @@ fn run_fine_pitch(map_sil: &[u8], map_bounds: &Bounds, map_ppu: f32) {
                 yaw: 0.0,
                 fov_y: fov,
                 distance: dist,
-                look_at: Vec2::ZERO,
-                screen_width: *sw as u32,
-                screen_height: *sh as u32,
+                look_at: WorldPos::ZERO,
             };
-            let (unproj, cov, ub) = unproject_mask(mask, *sw, *sh, &cam);
+            let screen_size = (*sw as u32, *sh as u32);
+            let (unproj, cov, ub) = unproject_mask(mask, *sw, *sh, &cam, screen_size);
             if ub.width == 0 || ub.height == 0 {
                 skip = true;
                 break;
@@ -641,7 +644,6 @@ fn run_detect(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_detect_with(
     mask: &[u8],
     sw: usize,
@@ -652,7 +654,8 @@ fn run_detect_with(
     cam: GameCamera,
     tiles_across: f32,
 ) {
-    let (unprojected, coverage, unproj_bounds) = unproject_mask(mask, sw, sh, &cam);
+    let screen_size = (sw as u32, sh as u32);
+    let (unprojected, coverage, unproj_bounds) = unproject_mask(mask, sw, sh, &cam, screen_size);
     save_gray(
         "step2_unprojected.png",
         &unprojected,
@@ -711,10 +714,10 @@ fn run_detect_with(
     for (i, &(ox, oy, score)) in peaks.iter().enumerate() {
         let cx = map_bounds.min_x + (ox as f32 + scaled_tw as f32 / 2.0) / map_ppu;
         let cy = map_bounds.max_y - (oy as f32 + scaled_th as f32 / 2.0) / map_ppu;
-        let hex = hex::world_to_hex(Vec2::new(cx, cy));
+        let hex = hex::world_to_hex(WorldPos::new(cx, cy));
         let marker = if i == 0 { " <-- best" } else { "" };
         println!("  #{}: offset=({ox}, {oy}) score={score:.4} center=({cx:.1}, {cy:.1}) hex=({}, {}){marker}",
-            i + 1, hex.x, hex.y);
+            i + 1, hex.x(), hex.y());
     }
 
     if let Some(&(ox, oy, _)) = peaks.first() {
@@ -775,7 +778,6 @@ fn binarize_screenshot(img: &image::RgbImage) -> Vec<u8> {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 struct Bounds {
     min_x: f32,
     max_x: f32,
@@ -829,25 +831,29 @@ fn unproject_mask(
     sw: usize,
     sh: usize,
     cam: &GameCamera,
+    screen_size: (u32, u32),
 ) -> (Vec<u8>, Vec<u8>, Bounds) {
     // Compute world bounds from the four screen corners.
     let corners = [
-        Vec2::new(0.0, 0.0),
-        Vec2::new(1.0, 0.0),
-        Vec2::new(0.0, 1.0),
-        Vec2::new(1.0, 1.0),
+        ScreenPos::new(0.0, 0.0),
+        ScreenPos::new(1.0, 0.0),
+        ScreenPos::new(0.0, 1.0),
+        ScreenPos::new(1.0, 1.0),
     ];
-    let world_corners: Vec<Vec2> = corners.iter().map(|&s| cam.screen_to_world(s)).collect();
+    let world_corners: Vec<WorldPos> = corners
+        .iter()
+        .map(|&s| cam.screen_to_world(s, screen_size))
+        .collect();
 
     let mut min_x = f32::MAX;
     let mut max_x = f32::MIN;
     let mut min_y = f32::MAX;
     let mut max_y = f32::MIN;
     for &c in &world_corners {
-        min_x = min_x.min(c.x);
-        max_x = max_x.max(c.x);
-        min_y = min_y.min(c.y);
-        max_y = max_y.max(c.y);
+        min_x = min_x.min(c.x());
+        max_x = max_x.max(c.x());
+        min_y = min_y.min(c.y());
+        max_y = max_y.max(c.y());
     }
 
     let margin = 2.0;
@@ -870,10 +876,10 @@ fn unproject_mask(
     // Iterate world space, project back to screen to sample mask.
     for py in 0..h {
         for px in 0..w {
-            let world = Vec2::new(min_x + px as f32 / ppu, max_y - py as f32 / ppu);
-            if let Some(screen) = cam.world_to_screen(world) {
-                let sx = (screen.x * sw as f32) as i32;
-                let sy = (screen.y * sh as f32) as i32;
+            let world = WorldPos::new(min_x + px as f32 / ppu, max_y - py as f32 / ppu);
+            if let Some(screen) = cam.world_to_screen(world, screen_size) {
+                let sx = (screen.0.x * sw as f32) as i32;
+                let sy = (screen.0.y * sh as f32) as i32;
                 if sx >= 0 && sx < sw as i32 && sy >= 0 && sy < sh as i32 {
                     let si = sy as usize * sw + sx as usize;
                     if screen_cov[si] > 0 {
@@ -909,10 +915,10 @@ fn render_map_silhouette(map: &Map, ppu: f32) -> (Vec<u8>, Bounds) {
 
     for pos in map.iter_tile_positions() {
         let world = hex::hex_to_world(pos);
-        min_x = min_x.min(world.x);
-        max_x = max_x.max(world.x);
-        min_y = min_y.min(world.y);
-        max_y = max_y.max(world.y);
+        min_x = min_x.min(world.x());
+        max_x = max_x.max(world.x());
+        min_y = min_y.min(world.y());
+        max_y = max_y.max(world.y());
     }
 
     let margin = 2.0;
@@ -937,8 +943,8 @@ fn render_map_silhouette(map: &Map, ppu: f32) -> (Vec<u8>, Bounds) {
     let r_sq = r * r;
     for pos in map.iter_tile_positions() {
         let world = hex::hex_to_world(pos);
-        let cx = ((world.x - min_x) * ppu) as i32;
-        let cy = ((max_y - world.y) * ppu) as i32;
+        let cx = ((world.x() - min_x) * ppu) as i32;
+        let cy = ((max_y - world.y()) * ppu) as i32;
         for dy in -r..=r {
             for dx in -r..=r {
                 if dx * dx + dy * dy <= r_sq {
@@ -1033,7 +1039,6 @@ fn find_best_offset_fast(
 }
 
 /// Return top-N peaks with non-maximum suppression (min_dist between peaks).
-#[allow(clippy::too_many_arguments)]
 fn find_top_offsets(
     map_img: &[u8],
     mw: usize,
@@ -1099,7 +1104,6 @@ fn save_gray(path: &str, data: &[u8], w: usize, h: usize) {
     img.save(path).unwrap();
 }
 
-#[allow(clippy::too_many_arguments)]
 fn save_overlay(
     path: &str,
     map_img: &[u8],

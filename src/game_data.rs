@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::{
     best_placements::BestPlacements,
-    data::{EdgeMatch, Pos, Terrain},
+    data::{EdgeMatch, HexPos, Terrain},
     group_assignments::GroupAssignments,
     map::Map,
     tile_frequency::TileFrequencies,
@@ -15,12 +15,12 @@ pub struct GameData {
     pub best_placements: BestPlacements,
     pub tile_frequencies: TileFrequencies,
     /// Tiles with at least one non-matching edge. Computed lazily.
-    imperfect_tiles: Option<HashSet<Pos>>,
+    imperfect_tiles: Option<HashSet<HexPos>>,
 }
 
 impl GameData {
     /// Get or compute the set of tiles that have at least one non-matching neighbor edge.
-    pub fn imperfect_tiles(&mut self) -> &HashSet<Pos> {
+    pub fn imperfect_tiles(&mut self) -> &HashSet<HexPos> {
         if self.imperfect_tiles.is_none() {
             self.imperfect_tiles = Some(compute_imperfect_tiles(&self.map));
         }
@@ -33,7 +33,7 @@ impl GameData {
     }
 }
 
-fn compute_imperfect_tiles(map: &Map) -> HashSet<Pos> {
+fn compute_imperfect_tiles(map: &Map) -> HashSet<HexPos> {
     let mut result = HashSet::new();
     for pos in map.iter_tile_positions() {
         let key = match map.tile_key(pos) {

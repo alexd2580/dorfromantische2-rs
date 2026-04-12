@@ -121,13 +121,12 @@ impl TryFrom<&Value> for GroupTypeId {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Segment {
     pub group_type: GroupTypeId,
     pub segment_type: SegmentTypeId,
     pub rotation: i32,
-    version: i32,
+    _version: i32,
 }
 
 impl TryFrom<&Value> for Segment {
@@ -139,12 +138,11 @@ impl TryFrom<&Value> for Segment {
             group_type: try_key_as(values, "groupType")?,
             segment_type: try_key_as(values, "segmentType")?,
             rotation: try_key_as(values, "rotation")?,
-            version: try_key_as(values, "version")?,
+            _version: try_key_as(values, "version")?,
         })
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct QuestTile {
     pub quest_tile_id: QuestTileId,
@@ -154,7 +152,7 @@ pub struct QuestTile {
     pub quest_level: i32,
     pub quest_id: QuestId,
     pub unlocked_challenge_id: ChallengeId,
-    version: i32,
+    _version: i32,
 }
 
 impl TryFrom<&Value> for QuestTile {
@@ -170,22 +168,21 @@ impl TryFrom<&Value> for QuestTile {
             quest_level: try_key_as(values, "questLevel")?,
             quest_id: try_key_as(values, "questId")?,
             unlocked_challenge_id: try_key_as(values, "unlockedChallengeId")?,
-            version: try_key_as(values, "version")?,
+            _version: try_key_as(values, "version")?,
         })
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Tile {
     pub s: i32,
     pub t: i32,
     pub rotation: i32,
-    seed: i32,
+    _seed: i32,
     pub segments: Vec<Segment>,
     pub special_tile_id: SpecialTileId,
     pub quest_tile: Option<QuestTile>,
-    version: i32,
+    _version: i32,
 }
 
 impl TryFrom<&Value> for Tile {
@@ -198,7 +195,7 @@ impl TryFrom<&Value> for Tile {
             s: grid_pos[0],
             t: grid_pos[1],
             rotation: try_key_as(values, "rotation")?,
-            seed: try_key_as(values, "seed")?,
+            _seed: try_key_as(values, "seed")?,
             segments: filter_none(
                 try_key_as::<Maybe<GenericList<_>>>(values, "segments")?
                     .into_option()
@@ -207,12 +204,11 @@ impl TryFrom<&Value> for Tile {
             ),
             special_tile_id: try_key_as(values, "specialTileId")?,
             quest_tile: try_key_as::<Maybe<_>>(values, "questTileData")?.into_option(),
-            version: try_key_as(values, "version")?,
+            _version: try_key_as(values, "version")?,
         })
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct PreplacedTile {
     pub section_grid_pos_x: i32,
@@ -235,7 +231,6 @@ impl TryFrom<&Value> for PreplacedTile {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct SaveGame {
     pub game_mode: GameModeId,
@@ -302,17 +297,10 @@ impl TryFrom<&Value> for SaveGame {
             )?
             .into(),
 
-            // active_challenges: ActiveSessionQuestList,
-            // active_challenges: try_key_as(values, "activeChallenges")?,
             tile_stack_count: try_key_as(values, "tileStackCount")?,
-            // screenshot: PrimitiveArray<Byte>
-            // last_played: PrimitiveArray<I32>
             file_name: try_key_as::<Maybe<_>>(values, "fileName")?.into_option(),
             initial_version: try_key_as(values, "initialVersion")?,
             last_played_version: try_key_as(values, "lastPlayedVersion")?,
-            // group_type_configuration: try_key_as::<GenericList<_>>(values, "groupTypeConfiguration")?,
-            // excluded_biomes: try_key_as::<GenericList<_>>(values, "excludedBiomes")?,
-            // custom_mode_data: ...
             last_rewarded_step: try_key_as::<GenericList<_>>(values, "lastRewardedStep")?.into(),
             last_rewarded_score: try_key_as::<GenericList<_>>(values, "lastRewardedScore")?.into(),
             // onUpdated
@@ -321,41 +309,6 @@ impl TryFrom<&Value> for SaveGame {
     }
 }
 
-/// Dump the raw NRBF structure of the first tile for debugging.
-#[allow(dead_code)]
-pub fn dump_first_tile(value: &Value) -> String {
-    if let Value::Object(_, values) = value {
-        if let Ok(tiles) = try_key_of(values, "tiles") {
-            let items = try_prefix_object_from("System.Collections.Generic.List`1[", tiles)
-                .and_then(|v| try_key_of(v, "_items"));
-            if let Ok(Value::Array(_, _, items)) = items {
-                if let Some(tile) = items.first() {
-                    return format!("{tile:#?}");
-                }
-            }
-        }
-    }
-    "Could not find tiles".to_string()
-}
-
-/// Dump the raw NRBF value of `activeChallenges` for debugging.
-#[allow(dead_code)]
-pub fn dump_active_challenges(value: &Value) -> String {
-    if let Value::Object(_, values) = value {
-        if let Ok(val) = try_key_of(values, "activeChallenges") {
-            format!("{val:#?}")
-        } else {
-            format!(
-                "No activeChallenges field. Keys: {:?}",
-                values.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>()
-            )
-        }
-    } else {
-        "Not an object".to_string()
-    }
-}
-
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct GameModeId(pub i32);
 
@@ -377,21 +330,6 @@ impl TryFrom<&Value> for QuestTileId {
         from_id_object("QuestTileId", value).map(Self)
     }
 }
-
-// struct ActiveSessionQuestList(Vec<ActiveSessionQuest>);
-//
-// impl TryFrom<&Value> for ActiveSessionQuestList {
-//     type Error = String;
-//
-//     fn try_from(value: &Value) -> Result<Self, String> {
-//         let list = try_generic_list_from(value)?;
-//         let list = list
-//             .into_iter()
-//             .map(|item| ActiveSessionQuest::try_from(item))
-//             .collect::<Result<_, _>>()?;
-//         Ok(Self(list))
-//     }
-// }
 
 #[derive(Debug)]
 pub struct QuestId(pub i32);

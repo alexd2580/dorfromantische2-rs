@@ -2,16 +2,26 @@ use dorfromantische2_rs::best_placements::{
     constraints_at, fit_chance_for_constraints, BestPlacements, MAX_SHOWN_PLACEMENTS,
 };
 use dorfromantische2_rs::data::{
-    quest_terrain, EdgeMatch, EdgeProfile, Form, Pos, Segment, Side, Terrain, HEX_SIDES,
+    quest_terrain, EdgeMatch, EdgeProfile, Form, HexPos, Segment, Side, Terrain, HEX_SIDES,
 };
 use dorfromantische2_rs::group_assignments::GroupAssignments;
 use dorfromantische2_rs::map::Map;
-use dorfromantische2_rs::raw_data::{self, SaveGame};
+use dorfromantische2_rs::raw_data::{QuestTileId, SaveGame};
 use std::io::Cursor;
 
 // ===========================================================================
 // Helpers
 // ===========================================================================
+
+/// Return early from a test if the fixture file doesn't exist.
+macro_rules! require_fixture {
+    ($expr:expr) => {
+        match $expr {
+            Some(v) => v,
+            None => return,
+        }
+    };
+}
 
 fn load_raw(path: &str) -> nrbf_rs::value::Value {
     let data = std::fs::read(path).unwrap_or_else(|_| panic!("{path} not found"));
@@ -23,12 +33,20 @@ fn load_savegame(path: &str) -> SaveGame {
     SaveGame::try_from(&parsed).unwrap_or_else(|e| panic!("Failed to parse {path}: {e}"))
 }
 
-fn load_dorfromantik() -> SaveGame {
-    load_savegame("dorfromantik.dump")
+fn try_load_savegame(path: &str) -> Option<SaveGame> {
+    if !std::path::Path::new(path).exists() {
+        eprintln!("Skipping test: fixture {path} not found");
+        return None;
+    }
+    Some(load_savegame(path))
 }
 
-fn load_biggame() -> SaveGame {
-    load_savegame("biggame.sav")
+fn load_dorfromantik() -> Option<SaveGame> {
+    try_load_savegame("tests/fixtures/dorfromantik.dump")
+}
+
+fn load_biggame() -> Option<SaveGame> {
+    try_load_savegame("tests/fixtures/biggame.sav")
 }
 
 fn build_map(savegame: &SaveGame) -> Map {
@@ -50,7 +68,7 @@ fn compute_placements(map: &Map, groups: &GroupAssignments) -> BestPlacements {
 
 #[test]
 fn test_load_dorfromantik_savegame() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     assert_eq!(sg.version, 3);
     assert_eq!(sg.score, 949490);
     assert_eq!(sg.level, 312);
@@ -69,7 +87,7 @@ fn test_load_dorfromantik_savegame() {
 
 #[test]
 fn test_load_biggame_savegame() {
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     assert_eq!(sg.version, 3);
     // These values change when the savegame is updated — just verify they parse.
     assert!(sg.score > 0);
@@ -83,7 +101,7 @@ fn test_load_biggame_savegame() {
 
 #[test]
 fn test_savegame_tile_count_close_to_placed() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     // tiles vec may be slightly larger than placed_tile_count due to null filtering
     // in the GenericList, but should be close
     let diff = (sg.tiles.len() as i32 - sg.placed_tile_count).abs();
@@ -97,7 +115,7 @@ fn test_savegame_tile_count_close_to_placed() {
 
 #[test]
 fn test_biggame_tile_count_close_to_placed() {
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     let diff = (sg.tiles.len() as i32 - sg.placed_tile_count).abs();
     assert!(
         diff <= 200,
@@ -109,7 +127,7 @@ fn test_biggame_tile_count_close_to_placed() {
 
 #[test]
 fn test_savegame_has_tile_stack() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     assert!(!sg.tile_stack.is_empty());
     // tile_stack_count is the allocated capacity; actual non-null entries may be fewer
     assert!(sg.tile_stack.len() <= sg.tile_stack_count as usize);
@@ -117,22 +135,22 @@ fn test_savegame_has_tile_stack() {
 
 #[test]
 fn test_biggame_has_tile_stack() {
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     assert!(!sg.tile_stack.is_empty());
     assert!(sg.tile_stack.len() <= sg.tile_stack_count as usize);
 }
 
 #[test]
 fn test_savegame_has_preplaced_tiles() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     assert!(!sg.preplaced_tiles.is_empty());
 }
 
 #[test]
 fn dump_preplaced_tiles() {
     // Both savegames share the same preplaced_tile_seed, so preplaced_tiles should be identical.
-    let sg1 = load_dorfromantik();
-    let sg2 = load_biggame();
+    let sg1 = require_fixture!(load_dorfromantik());
+    let sg2 = require_fixture!(load_biggame());
 
     // The smaller save has fewer placed tiles. Find quest tiles that exist in sg2 but not sg1
     // — those were placed between the two saves, giving us section->hex pairs.
@@ -313,7 +331,7 @@ fn dump_preplaced_tiles() {
 
 #[test]
 fn test_savegame_string_fields() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     assert_eq!(sg.last_played_version.len(), 7);
     assert_eq!(sg.initial_version.len(), 5);
     assert!(sg.file_name.is_some());
@@ -322,22 +340,22 @@ fn test_savegame_string_fields() {
 
 #[test]
 fn test_savegame_playtime_positive() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     assert!(sg.playtime > 0.0);
 }
 
 #[test]
 fn test_savegame_shared_seeds() {
-    let sg1 = load_dorfromantik();
-    let sg2 = load_biggame();
+    let sg1 = require_fixture!(load_dorfromantik());
+    let sg2 = require_fixture!(load_biggame());
     assert_eq!(sg1.biome_seed, sg2.biome_seed);
     assert_eq!(sg1.preplaced_tile_seed, sg2.preplaced_tile_seed);
 }
 
 #[test]
 fn test_biggame_larger_than_dorfromantik() {
-    let sg1 = load_dorfromantik();
-    let sg2 = load_biggame();
+    let sg1 = require_fixture!(load_dorfromantik());
+    let sg2 = require_fixture!(load_biggame());
     assert!(sg2.score > sg1.score);
     assert!(sg2.placed_tile_count > sg1.placed_tile_count);
     assert!(sg2.level > sg1.level);
@@ -350,7 +368,7 @@ fn test_biggame_larger_than_dorfromantik() {
 
 #[test]
 fn test_tiles_have_valid_coordinates() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     // Coordinates should span a reasonable range around origin
     let min_s = sg.tiles.iter().map(|t| t.s).min().unwrap();
     let max_s = sg.tiles.iter().map(|t| t.s).max().unwrap();
@@ -364,7 +382,7 @@ fn test_tiles_have_valid_coordinates() {
 
 #[test]
 fn test_tiles_have_valid_rotations() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     for tile in &sg.tiles {
         assert!(
             tile.rotation >= 0 && tile.rotation < HEX_SIDES as i32,
@@ -378,7 +396,7 @@ fn test_tiles_have_valid_rotations() {
 
 #[test]
 fn test_most_tiles_have_segments() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let with_segments = sg.tiles.iter().filter(|t| !t.segments.is_empty()).count();
     // The vast majority of tiles should have segments
     assert!(
@@ -390,7 +408,7 @@ fn test_most_tiles_have_segments() {
 
 #[test]
 fn test_segment_rotations_valid() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     for tile in &sg.tiles {
         for seg in &tile.segments {
             assert!(
@@ -408,7 +426,7 @@ fn test_segment_rotations_valid() {
 
 #[test]
 fn test_map_from_dorfromantik() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
 
     // Map should have segments
@@ -421,7 +439,7 @@ fn test_map_from_dorfromantik() {
 
 #[test]
 fn test_map_from_biggame() {
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     let map = build_map(&sg);
     assert!(!map.segments.is_empty());
     assert!(map.index_size.x > 0);
@@ -430,17 +448,17 @@ fn test_map_from_biggame() {
 
 #[test]
 fn test_map_has_origin_tile() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
 
     // Origin should exist in the map
-    let origin = Pos::new(0, 0);
+    let origin = HexPos::new(0, 0);
     assert!(map.has(origin), "Map should contain origin tile");
 }
 
 #[test]
 fn test_map_tiles_mostly_have_segments() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
 
     // Count tiles that have at least one segment in the map
@@ -458,7 +476,7 @@ fn test_map_tiles_mostly_have_segments() {
 
 #[test]
 fn test_map_segment_terrains_valid() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
 
     for segment in &map.segments {
@@ -472,7 +490,7 @@ fn test_map_segment_terrains_valid() {
 
 #[test]
 fn test_map_segment_rotations_valid() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
 
     for segment in &map.segments {
@@ -486,7 +504,7 @@ fn test_map_segment_rotations_valid() {
 
 #[test]
 fn test_map_next_tile_exists() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
 
     assert!(!map.next_tile.is_empty(), "Next tile should have segments");
@@ -494,7 +512,7 @@ fn test_map_next_tile_exists() {
 
 #[test]
 fn test_map_next_tile_rendered() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
 
     // At least one side of the next tile should have a non-empty terrain
@@ -510,10 +528,10 @@ fn test_map_next_tile_rendered() {
 
 #[test]
 fn test_map_tile_positions_unique() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
 
-    let positions: Vec<Pos> = map.iter_tile_positions().collect();
+    let positions: Vec<HexPos> = map.iter_tile_positions().collect();
     let mut seen = std::collections::HashSet::new();
     for pos in &positions {
         assert!(seen.insert(*pos), "Duplicate tile position: {pos}");
@@ -522,8 +540,8 @@ fn test_map_tile_positions_unique() {
 
 #[test]
 fn test_map_biggame_larger() {
-    let sg1 = load_dorfromantik();
-    let sg2 = load_biggame();
+    let sg1 = require_fixture!(load_dorfromantik());
+    let sg2 = require_fixture!(load_biggame());
     let map1 = build_map(&sg1);
     let map2 = build_map(&sg2);
 
@@ -532,13 +550,13 @@ fn test_map_biggame_larger() {
 
 #[test]
 fn test_map_neighbor_positions() {
-    let origin = Pos::new(0, 0);
-    let neighbors: Vec<Pos> = (0..HEX_SIDES)
+    let origin = HexPos::new(0, 0);
+    let neighbors: Vec<HexPos> = (0..HEX_SIDES)
         .map(|r| Map::neighbor_pos_of(origin, r))
         .collect();
 
     // All 6 neighbors should be distinct
-    let unique: std::collections::HashSet<Pos> = neighbors.iter().copied().collect();
+    let unique: std::collections::HashSet<HexPos> = neighbors.iter().copied().collect();
     assert_eq!(unique.len(), HEX_SIDES);
 
     // Going to a neighbor and back should return to origin
@@ -567,7 +585,7 @@ fn test_map_opposite_side() {
 
 #[test]
 fn test_group_analysis_dorfromantik() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
 
@@ -583,7 +601,7 @@ fn test_group_analysis_dorfromantik() {
 
 #[test]
 fn test_group_analysis_biggame() {
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
 
@@ -593,7 +611,7 @@ fn test_group_analysis_biggame() {
 
 #[test]
 fn test_every_segment_assigned_to_group() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
 
@@ -608,7 +626,7 @@ fn test_every_segment_assigned_to_group() {
 
 #[test]
 fn test_group_segments_reference_valid_indices() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
 
@@ -624,7 +642,7 @@ fn test_group_segments_reference_valid_indices() {
 
 #[test]
 fn test_group_of_returns_valid_indices() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
 
@@ -640,7 +658,7 @@ fn test_group_of_returns_valid_indices() {
 
 #[test]
 fn test_possible_placements_not_in_map() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
 
@@ -654,7 +672,7 @@ fn test_possible_placements_not_in_map() {
 
 #[test]
 fn test_possible_placements_adjacent_to_map() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
 
@@ -672,7 +690,7 @@ fn test_possible_placements_adjacent_to_map() {
 
 #[test]
 fn test_some_groups_are_closed() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
 
@@ -686,7 +704,7 @@ fn test_some_groups_are_closed() {
 
 #[test]
 fn test_some_groups_are_open() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
 
@@ -700,7 +718,7 @@ fn test_some_groups_are_open() {
 
 #[test]
 fn test_best_placements_dorfromantik() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
     let placements = compute_placements(&map, &groups);
@@ -714,7 +732,7 @@ fn test_best_placements_dorfromantik() {
 
 #[test]
 fn test_best_placements_biggame() {
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
     let placements = compute_placements(&map, &groups);
@@ -725,7 +743,7 @@ fn test_best_placements_biggame() {
 
 #[test]
 fn test_best_placements_limited_to_max() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
     let placements = compute_placements(&map, &groups);
@@ -741,7 +759,7 @@ fn test_best_placements_limited_to_max() {
 
 #[test]
 fn test_best_placements_valid_positions() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
     let placements = compute_placements(&map, &groups);
@@ -765,7 +783,7 @@ fn test_best_placements_valid_positions() {
 
 #[test]
 fn test_best_placements_sorted_by_quality() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
     let map = build_map(&sg);
     let groups = analyze_groups(&map);
     let placements = compute_placements(&map, &groups);
@@ -791,7 +809,7 @@ fn test_best_placements_sorted_by_quality() {
 
 #[test]
 fn test_full_pipeline_deterministic() {
-    let sg = load_dorfromantik();
+    let sg = require_fixture!(load_dorfromantik());
 
     let map1 = build_map(&sg);
     let groups1 = analyze_groups(&map1);
@@ -928,28 +946,12 @@ fn test_terrain_from_group_type_id_all_known() {
     }
 }
 
-#[test]
-fn dump_first_tile() {
-    let raw = load_raw("mini.sav");
-    println!("{}", raw_data::dump_first_tile(&raw));
-}
-
-#[test]
-fn dump_active_challenges_structure() {
-    for path in ["biggame.sav", "dorfromantik.dump", "mini.sav"] {
-        let raw = load_raw(path);
-        println!("=== {path} ===");
-        println!("{}", raw_data::dump_active_challenges(&raw));
-        println!();
-    }
-}
-
 // Quest tile segment generation is tested indirectly through the full pipeline tests
 // (test_full_pipeline_*) which load real save files containing quest tiles.
 
 #[test]
 fn dump_last_tile() {
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     let last = sg.tiles.last().unwrap();
     println!(
         "Last tile: pos=({}, {}), rotation={}, special_tile_id={:?}",
@@ -970,7 +972,7 @@ fn dump_last_tile() {
 
 fn make_segment(form: Form, terrain: Terrain, rotation: usize) -> Segment {
     Segment {
-        pos: Pos::new(0, 0),
+        pos: HexPos::new(0, 0),
         form,
         terrain,
         rotation,
@@ -1027,13 +1029,13 @@ fn test_form_default_unit_count_rail_always_one() {
 
 #[test]
 fn test_quest_terrain_known_ids() {
-    assert_eq!(quest_terrain(2), Some(Terrain::Wheat));
-    assert_eq!(quest_terrain(5), Some(Terrain::Wheat));
-    assert_eq!(quest_terrain(16), Some(Terrain::Forest));
-    assert_eq!(quest_terrain(33), Some(Terrain::House));
-    assert_eq!(quest_terrain(25), Some(Terrain::Rail));
-    assert_eq!(quest_terrain(47), Some(Terrain::River));
-    assert_eq!(quest_terrain(999), None);
+    assert_eq!(quest_terrain(QuestTileId(2)), Some(Terrain::Wheat));
+    assert_eq!(quest_terrain(QuestTileId(5)), Some(Terrain::Wheat));
+    assert_eq!(quest_terrain(QuestTileId(16)), Some(Terrain::Forest));
+    assert_eq!(quest_terrain(QuestTileId(33)), Some(Terrain::House));
+    assert_eq!(quest_terrain(QuestTileId(25)), Some(Terrain::Rail));
+    assert_eq!(quest_terrain(QuestTileId(47)), Some(Terrain::River));
+    assert_eq!(quest_terrain(QuestTileId(999)), None);
 }
 
 #[test]
@@ -1067,25 +1069,26 @@ fn test_edge_match_variants() {
 
 #[test]
 fn test_world_to_hex_known_values() {
+    use dorfromantische2_rs::coords::WorldPos;
+    use dorfromantische2_rs::data::HexPos;
     use dorfromantische2_rs::hex;
-    use glam::{IVec2, Vec2};
     // Origin
-    assert_eq!(hex::world_to_hex(Vec2::ZERO), IVec2::ZERO);
+    assert_eq!(hex::world_to_hex(WorldPos::ZERO), HexPos::ZERO);
     // Hex (1,0) -> world (1.5, COS_30) -> back
-    let w = hex::hex_to_world(IVec2::new(1, 0));
-    assert_eq!(hex::world_to_hex(w), IVec2::new(1, 0));
+    let w = hex::hex_to_world(HexPos::new(1, 0));
+    assert_eq!(hex::world_to_hex(w), HexPos::new(1, 0));
     // Hex (-2, 3)
-    let w = hex::hex_to_world(IVec2::new(-2, 3));
-    assert_eq!(hex::world_to_hex(w), IVec2::new(-2, 3));
+    let w = hex::hex_to_world(HexPos::new(-2, 3));
+    assert_eq!(hex::world_to_hex(w), HexPos::new(-2, 3));
 }
 
 #[test]
 fn test_world_to_hex_grid_roundtrip() {
+    use dorfromantische2_rs::data::HexPos;
     use dorfromantische2_rs::hex;
-    use glam::IVec2;
     for x in -10..=10 {
         for y in -10..=10 {
-            let pos = IVec2::new(x, y);
+            let pos = HexPos::new(x, y);
             let world = hex::hex_to_world(pos);
             let back = hex::world_to_hex(world);
             assert_eq!(back, pos, "Roundtrip failed for ({x}, {y})");
@@ -1125,7 +1128,7 @@ fn test_terrain_lake_station_matching() {
 #[test]
 fn test_segment_rotation_always_valid() {
     // All segments in a loaded map should have rotation < 6.
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     let map = Map::from(&sg);
     for seg in &map.segments {
         assert!(
@@ -1141,7 +1144,7 @@ fn test_segment_rotation_always_valid() {
 fn test_segment_contains_rotation_consistent() {
     // For every segment, contains_rotation should be true for exactly the sides
     // returned by rotations().
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     let map = Map::from(&sg);
     for seg in &map.segments {
         let from_iter: std::collections::HashSet<usize> = seg.rotations().collect();
@@ -1161,7 +1164,7 @@ fn test_segment_contains_rotation_consistent() {
 #[test]
 fn test_lake_segments_exist_in_savegame() {
     // Verify that lake terrain segments actually exist in the loaded data.
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     let map = Map::from(&sg);
     let lake_count = map
         .segments
@@ -1173,7 +1176,7 @@ fn test_lake_segments_exist_in_savegame() {
 
 #[test]
 fn test_station_segments_exist_in_savegame() {
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     let map = Map::from(&sg);
     let station_count = map
         .segments
@@ -1186,7 +1189,7 @@ fn test_station_segments_exist_in_savegame() {
 #[test]
 fn test_tile_frequency_computes() {
     use dorfromantische2_rs::tile_frequency::TileFrequencies;
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     let map = Map::from(&sg);
     let freqs = TileFrequencies::from_map(&map);
     assert!(freqs.total_tiles > 0);
@@ -1204,7 +1207,7 @@ fn test_tile_frequency_computes() {
 
 #[test]
 fn test_edge_profile_matches_rendered_tiles() {
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     let map = Map::from(&sg);
     let index_len = map.tile_index.len();
     let mut checked = 0;
@@ -1238,30 +1241,30 @@ fn test_edge_profile_matches_rendered_tiles() {
 
 #[test]
 fn test_neighbor_pos_of_six_unique() {
-    let origin = Pos::new(0, 0);
-    let neighbors: Vec<Pos> = (0..HEX_SIDES)
+    let origin = HexPos::new(0, 0);
+    let neighbors: Vec<HexPos> = (0..HEX_SIDES)
         .map(|r| Map::neighbor_pos_of(origin, r))
         .collect();
-    let unique: std::collections::HashSet<Pos> = neighbors.iter().copied().collect();
+    let unique: std::collections::HashSet<HexPos> = neighbors.iter().copied().collect();
     assert_eq!(unique.len(), HEX_SIDES);
 }
 
 #[test]
 fn test_neighbor_pos_of_known_values() {
-    let origin = Pos::new(0, 0);
-    assert_eq!(Map::neighbor_pos_of(origin, 0), Pos::new(0, 1));
-    assert_eq!(Map::neighbor_pos_of(origin, 1), Pos::new(1, 0));
-    assert_eq!(Map::neighbor_pos_of(origin, 2), Pos::new(1, -1));
-    assert_eq!(Map::neighbor_pos_of(origin, 3), Pos::new(0, -1));
-    assert_eq!(Map::neighbor_pos_of(origin, 4), Pos::new(-1, 0));
-    assert_eq!(Map::neighbor_pos_of(origin, 5), Pos::new(-1, 1));
+    let origin = HexPos::new(0, 0);
+    assert_eq!(Map::neighbor_pos_of(origin, 0), HexPos::new(0, 1));
+    assert_eq!(Map::neighbor_pos_of(origin, 1), HexPos::new(1, 0));
+    assert_eq!(Map::neighbor_pos_of(origin, 2), HexPos::new(1, -1));
+    assert_eq!(Map::neighbor_pos_of(origin, 3), HexPos::new(0, -1));
+    assert_eq!(Map::neighbor_pos_of(origin, 4), HexPos::new(-1, 0));
+    assert_eq!(Map::neighbor_pos_of(origin, 5), HexPos::new(-1, 1));
 }
 
 #[test]
 fn test_neighbor_roundtrip_all_positions() {
     for x in -3..=3 {
         for y in -3..=3 {
-            let pos = Pos::new(x, y);
+            let pos = HexPos::new(x, y);
             for rotation in 0..HEX_SIDES {
                 let neighbor = Map::neighbor_pos_of(pos, rotation);
                 let back = Map::neighbor_pos_of(neighbor, Map::opposite_side(rotation));
@@ -1283,7 +1286,7 @@ fn test_opposite_side_values() {
 
 #[test]
 fn print_biggame_quests() {
-    let save = load_biggame();
+    let save = require_fixture!(load_biggame());
     let map = Map::from(&save);
     let _groups = GroupAssignments::from(&map);
 
@@ -1292,7 +1295,7 @@ fn print_biggame_quests() {
     for tile in &save.tiles {
         if let Some(qt) = &tile.quest_tile {
             if qt.target_value >= 0 {
-                let terrain = quest_terrain(qt.quest_tile_id.0)
+                let terrain = quest_terrain(qt.quest_tile_id)
                     .map(|t| format!("{t:?}"))
                     .unwrap_or_else(|| "?".into());
                 println!(
@@ -1316,7 +1319,7 @@ fn print_biggame_quests() {
 fn test_fit_chance_empirical_validation() {
     use dorfromantische2_rs::tile_frequency::TileFrequencies;
 
-    let sg = load_biggame();
+    let sg = require_fixture!(load_biggame());
     let map = Map::from(&sg);
     let freqs = TileFrequencies::from_map(&map);
 
@@ -1390,108 +1393,4 @@ fn test_fit_chance_empirical_validation() {
         "Only {pct:.1}% of tiles had nonzero fit chance ({fit_nonzero}/{checked})"
     );
     println!("Validated {checked} tiles, {fit_nonzero} with nonzero fit chance ({pct:.1}%)");
-}
-
-/// Validate that fit_chance_with_min_edges is monotonically decreasing:
-/// more required edges = fewer fitting tiles.
-#[test]
-fn test_fit_chance_monotonic_in_edges() {
-    use dorfromantische2_rs::best_placements::fit_chance_with_min_edges;
-    use dorfromantische2_rs::tile_frequency::TileFrequencies;
-
-    let sg = load_biggame();
-    let map = Map::from(&sg);
-    let freqs = TileFrequencies::from_map(&map);
-
-    let mut checked = 0;
-    // Sample some positions.
-    for pos in map.iter_tile_positions().step_by(50) {
-        let constraints = constraints_at(&map, pos);
-        let num_constrained = constraints.iter().filter(|c| c.is_some()).count() as u8;
-
-        let mut prev_chance = f32::MAX;
-        for min_edges in 0..=num_constrained {
-            let (chance, _) = fit_chance_with_min_edges(&freqs, &constraints, min_edges);
-            assert!(
-                chance <= prev_chance + f32::EPSILON,
-                "Fit chance increased at {pos:?}: min_edges={min_edges}, \
-                 prev={prev_chance}, now={chance}"
-            );
-            prev_chance = chance;
-        }
-        checked += 1;
-    }
-    assert!(checked > 100, "Only checked {checked} positions");
-    println!("Monotonicity validated for {checked} positions");
-}
-
-/// Validate that a perfect-fit tile (all edges matching) is always counted
-/// in the fit_chance at its own edge count.
-#[test]
-fn test_fit_chance_perfect_tile_counted() {
-    use dorfromantische2_rs::best_placements::fit_chance_with_min_edges;
-    use dorfromantische2_rs::tile_frequency::TileFrequencies;
-
-    let sg = load_biggame();
-    let map = Map::from(&sg);
-    let freqs = TileFrequencies::from_map(&map);
-
-    let mut perfect_tiles = 0;
-    let mut counted_at_own_level = 0;
-
-    for pos in map.iter_tile_positions() {
-        let key = match map.tile_key(pos) {
-            Some(k) => k,
-            None => continue,
-        };
-        let (base, count) = match map.tile_index[key] {
-            Some(bc) => bc,
-            None => continue,
-        };
-        if count == 0 {
-            continue;
-        }
-
-        let segments = &map.segments[base..base + count];
-        let tile_profile = EdgeProfile::from_segments(segments);
-        let constraints = constraints_at(&map, pos);
-
-        // Count this tile's matching edges.
-        let own_matches: u8 = constraints
-            .iter()
-            .enumerate()
-            .filter(|(side, c)| {
-                c.is_some_and(|neighbor| {
-                    matches!(
-                        tile_profile.at_index(*side).connects_and_matches(neighbor),
-                        EdgeMatch::Matching
-                    )
-                })
-            })
-            .count() as u8;
-
-        let num_constrained = constraints.iter().filter(|c| c.is_some()).count() as u8;
-        if own_matches == num_constrained && num_constrained > 0 {
-            // Perfect placement — all constrained edges match.
-            perfect_tiles += 1;
-            // fit_chance with min_edges = own_matches should include this tile.
-            let (chance, _) = fit_chance_with_min_edges(&freqs, &constraints, own_matches);
-            if chance > 0.0 {
-                counted_at_own_level += 1;
-            }
-        }
-    }
-
-    assert!(
-        perfect_tiles > 1000,
-        "Only {perfect_tiles} perfect tiles found"
-    );
-    let pct = counted_at_own_level as f64 / perfect_tiles as f64 * 100.0;
-    assert!(
-        pct > 99.0,
-        "Only {pct:.1}% of perfect tiles were counted ({counted_at_own_level}/{perfect_tiles})"
-    );
-    println!(
-        "{perfect_tiles} perfect tiles, {counted_at_own_level} counted at own level ({pct:.1}%)"
-    );
 }

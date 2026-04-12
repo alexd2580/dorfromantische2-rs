@@ -6,7 +6,6 @@ use super::{Segment, Side, Terrain, HEX_SIDES};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EdgeProfile([Terrain; HEX_SIDES]);
 
-#[allow(dead_code)]
 impl EdgeProfile {
     /// Build an edge profile from a slice of segments.
     pub fn from_segments(segments: &[Segment]) -> Self {
@@ -27,11 +26,6 @@ impl EdgeProfile {
     /// Raw array access by index.
     pub fn at_index(&self, index: usize) -> Terrain {
         self.0[index]
-    }
-
-    /// The underlying array.
-    pub fn as_array(&self) -> &[Terrain; HEX_SIDES] {
-        &self.0
     }
 
     /// Rotate the profile clockwise by `offset` sides.
@@ -65,10 +59,11 @@ impl Default for EdgeProfile {
 mod tests {
     use super::super::Form;
     use super::*;
+    use crate::data::HexPos;
 
     fn seg(form: Form, terrain: Terrain, rotation: usize) -> Segment {
         Segment {
-            pos: glam::IVec2::ZERO,
+            pos: HexPos::ZERO,
             form,
             terrain,
             rotation,

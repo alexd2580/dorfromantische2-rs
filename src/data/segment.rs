@@ -1,10 +1,10 @@
 use crate::raw_data;
 
-use super::{Form, Pos, Rotation, Terrain, HEX_SIDES};
+use super::{Form, HexPos, Rotation, Terrain, HEX_SIDES};
 
 #[derive(Debug, Clone)]
 pub struct Segment {
-    pub pos: Pos,
+    pub pos: HexPos,
     pub form: Form,
     pub terrain: Terrain,
     pub rotation: Rotation,
@@ -12,20 +12,31 @@ pub struct Segment {
     pub unit_count: u32,
 }
 
-impl From<(&raw_data::Segment, Pos, Rotation)> for Segment {
-    fn from(value: (&raw_data::Segment, Pos, Rotation)) -> Self {
+/// Lake tiles use segment type IDs offset by +100 from their regular equivalents.
+fn is_lake_segment_type(id: &raw_data::SegmentTypeId) -> bool {
+    matches!(id.0, 102 | 105 | 109 | 111)
+}
+
+impl From<(&raw_data::Segment, HexPos, Rotation)> for Segment {
+    fn from(value: (&raw_data::Segment, HexPos, Rotation)) -> Self {
         let (raw_segment, pos, tile_rotation) = value;
 
         let form = (&raw_segment.segment_type).into();
         let mut terrain: Terrain = (&raw_segment.group_type).into();
         // Lake forms and Size6 rivers become Lake terrain.
-        if super::form::is_lake_segment_type(&raw_segment.segment_type)
+        if is_lake_segment_type(&raw_segment.segment_type)
             || (form == Form::Size6 && terrain == Terrain::River)
         {
             terrain = Terrain::Lake;
         }
 
-        let raw_rotation: Rotation = raw_segment.rotation.try_into().unwrap();
+        let raw_rotation: Rotation = raw_segment.rotation.try_into().unwrap_or_else(|_| {
+            log::warn!(
+                "Invalid segment rotation value {}, defaulting to 0",
+                raw_segment.rotation
+            );
+            0
+        });
         Self {
             pos,
             form,
@@ -37,7 +48,6 @@ impl From<(&raw_data::Segment, Pos, Rotation)> for Segment {
 }
 
 impl Segment {
-    #[allow(clippy::match_same_arms)]
     pub fn rotations(&self) -> impl Iterator<Item = Rotation> + '_ {
         match self.form {
             Form::Size1 => [0].as_slice(),

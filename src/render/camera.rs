@@ -1,6 +1,11 @@
-use glam::{IVec2, UVec2, Vec2};
+use glam::{UVec2, Vec2};
 
-use crate::{data::Pos, hex::COS_30, map::Map};
+use crate::{
+    coords::{PixelPos, WorldPos},
+    data::HexPos,
+    hex::COS_30,
+    map::Map,
+};
 
 use super::lerp::Interpolated;
 
@@ -44,23 +49,27 @@ impl Camera {
         self.aspect_ratio = f32_size.x / f32_size.y;
     }
 
-    pub fn on_scroll(&mut self, y: f32) {
-        self.inv_scale
-            .set(MIN_ZOOM.max(*self.inv_scale - y * 5.0).min(MAX_ZOOM));
+    pub fn on_scroll(&mut self, y: f32, mouse: PixelPos) {
+        let world_before = self.pixel_to_world(mouse);
+        let new_scale = (*self.inv_scale - y * 5.0).clamp(MIN_ZOOM, MAX_ZOOM);
+        self.inv_scale.set(new_scale);
+        let world_after = self.pixel_to_world(mouse);
+        // Shift origin so the world point under the mouse stays fixed.
+        self.origin
+            .set(*self.origin + world_before.0 - world_after.0);
     }
 
-    pub fn goto(&mut self, pos: Pos) {
+    pub fn goto(&mut self, pos: HexPos) {
         self.goto_world(crate::hex::hex_to_world(pos));
     }
 
-    pub fn goto_world(&mut self, world: Vec2) {
+    pub fn goto_world(&mut self, world: WorldPos) {
         let sidebar_offset = (1.0 - self.visible_fraction.x) * 0.5 * self.aspect_ratio * GOTO_ZOOM;
         self.origin
-            .set_target(world - Vec2::new(sidebar_offset, 0.0));
+            .set_target(world.0 - Vec2::new(sidebar_offset, 0.0));
         self.inv_scale.set_target(GOTO_ZOOM);
     }
 
-    #[allow(clippy::similar_names)]
     pub fn zoom_fit(&mut self, map: &Map) {
         use crate::hex::hex_to_world;
 
@@ -75,9 +84,9 @@ impl Camera {
             if entry.is_none() {
                 continue;
             }
-            let x = key as i32 % size.x + offset.x;
-            let y = key as i32 / size.x + offset.y;
-            let w = hex_to_world(Pos::new(x, y));
+            let col = key as i32 % size.x + offset.x;
+            let row = key as i32 / size.x + offset.y;
+            let w = hex_to_world(HexPos::new(col, row)).0;
             world_min = world_min.min(w);
             world_max = world_max.max(w);
             any = true;
@@ -94,9 +103,9 @@ impl Camera {
 
         // Visible world = inv_scale * (aspect, 1). Sidebar/panel reduce usable area.
         let effective_aspect = self.aspect_ratio * self.visible_fraction.x;
-        let xfit = world_size.x / effective_aspect;
-        let yfit = world_size.y / self.visible_fraction.y;
-        let inv_scale = xfit.max(yfit);
+        let fit_width = world_size.x / effective_aspect;
+        let fit_height = world_size.y / self.visible_fraction.y;
+        let inv_scale = fit_width.max(fit_height);
 
         // Shift center to account for sidebar (left) and navbar (top).
         let sidebar_offset = (1.0 - self.visible_fraction.x) * 0.5 * self.aspect_ratio * inv_scale;
@@ -107,20 +116,20 @@ impl Camera {
     }
 
     /// Compute world coordinates of pixel.
-    pub fn pixel_to_world(&self, pos: Vec2) -> Vec2 {
-        let relative = pos / self.size.as_vec2();
+    pub fn pixel_to_world(&self, pos: PixelPos) -> WorldPos {
+        let relative = pos.0 / self.size.as_vec2();
         let uv_2 = Vec2::new(1.0, -1.0) * (relative - 0.5);
-        *self.origin + uv_2 * Vec2::new(self.aspect_ratio, 1.0) * *self.inv_scale
+        WorldPos(*self.origin + uv_2 * Vec2::new(self.aspect_ratio, 1.0) * *self.inv_scale)
     }
 
     /// Compute pixel coordinates of world position.
-    pub fn world_to_pixel(&self, world: Vec2) -> Vec2 {
-        let uv_2 = (world - *self.origin) / (*self.inv_scale * Vec2::new(self.aspect_ratio, 1.0));
-        (uv_2 * Vec2::new(1.0, -1.0) + 0.5) * self.size.as_vec2()
+    pub fn world_to_pixel(&self, world: WorldPos) -> PixelPos {
+        let uv_2 = (world.0 - *self.origin) / (*self.inv_scale * Vec2::new(self.aspect_ratio, 1.0));
+        PixelPos((uv_2 * Vec2::new(1.0, -1.0) + 0.5) * self.size.as_vec2())
     }
 
     /// Compute pixel coordinates of hex position.
-    pub fn hex_to_pixel(&self, pos: IVec2) -> Vec2 {
+    pub fn hex_to_pixel(&self, pos: HexPos) -> PixelPos {
         self.world_to_pixel(crate::hex::hex_to_world(pos))
     }
 
@@ -165,23 +174,24 @@ mod tests {
         cam.resize(UVec2::new(800, 600));
         cam.inv_scale.set(50.0);
 
-        let pixel = Vec2::new(300.0, 200.0);
+        let pixel = PixelPos::new(300.0, 200.0);
         let world = cam.pixel_to_world(pixel);
         let back = cam.world_to_pixel(world);
         assert!(
-            (pixel - back).length() < 0.01,
-            "roundtrip failed: {pixel} -> {world} -> {back}"
+            (pixel.0 - back.0).length() < 0.01,
+            "roundtrip failed: {pixel:?} -> {world:?} -> {back:?}"
         );
     }
 
     #[test]
     fn test_on_scroll_clamps() {
         let mut cam = Camera::default();
+        cam.resize(UVec2::new(1280, 720));
         cam.inv_scale.set(DEFAULT_ZOOM);
+        let center = PixelPos::new(640.0, 360.0);
 
-        // Scroll up a lot — should not go below MIN_ZOOM.
         for _ in 0..200 {
-            cam.on_scroll(1.0);
+            cam.on_scroll(1.0, center);
         }
         assert!(
             *cam.inv_scale >= MIN_ZOOM,
@@ -189,9 +199,8 @@ mod tests {
             *cam.inv_scale
         );
 
-        // Scroll down a lot — should not exceed MAX_ZOOM.
         for _ in 0..400 {
-            cam.on_scroll(-1.0);
+            cam.on_scroll(-1.0, center);
         }
         assert!(
             *cam.inv_scale <= MAX_ZOOM,

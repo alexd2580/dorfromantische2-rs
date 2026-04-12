@@ -17,10 +17,6 @@ use crate::{
     ui::ui_state::UiState,
 };
 
-#[allow(dead_code)]
-const INITIAL_SHOWN_PLACEMENTS: usize = 5;
-
-#[allow(clippy::struct_excessive_bools)]
 pub struct App {
     program_start: SystemTime,
 
@@ -58,7 +54,8 @@ pub struct App {
     pub visible_rect: egui::Rect,
 }
 
-use crate::hex::COS_30;
+use crate::coords::{PixelPos, WorldPos};
+use crate::hex::{self, COS_30};
 
 impl App {
     fn create_view_buffer(gpu: &Gpu) -> Buffer {
@@ -69,7 +66,6 @@ impl App {
         )
     }
 
-    #[allow(clippy::identity_op)]
     fn create_tiles_buffer(gpu: &Gpu, byte_size: usize) -> Buffer {
         let tiles_buffer_size = u64::try_from(byte_size).unwrap();
         gpu.create_buffer(
@@ -145,14 +141,6 @@ impl App {
         app
     }
 
-    fn hex_to_world(pos: glam::IVec2) -> Vec2 {
-        crate::hex::hex_to_world(pos)
-    }
-
-    fn world_to_hex(pos: Vec2) -> glam::IVec2 {
-        crate::hex::world_to_hex(pos)
-    }
-
     pub fn on_cursor_move(&mut self, pos: Vec2) {
         let delta = (pos - self.input.mouse_position) / self.camera.size.as_vec2();
 
@@ -177,9 +165,9 @@ impl App {
             return;
         }
 
-        let world_pos = self.camera.pixel_to_world(pos);
-        self.input.hover_pos = Self::world_to_hex(world_pos);
-        let offset = world_pos - App::hex_to_world(self.input.hover_pos);
+        let world_pos = self.camera.pixel_to_world(PixelPos(pos));
+        self.input.hover_pos = hex::world_to_hex(world_pos);
+        let offset = world_pos.0 - hex::hex_to_world(self.input.hover_pos).0;
 
         let gradient = 2.0 * COS_30 * offset.x;
         self.input.hover_rotation =
@@ -270,8 +258,11 @@ impl App {
         self.camera.tick();
 
         // Game navigation: sync game viewport with solver viewport.
+        // Nav sync requires detection to be active.
+        self.game_nav.detect_enabled =
+            self.ui_state.viewport_detect_enabled || self.ui_state.game_nav_enabled;
         self.game_nav.enabled = self.ui_state.game_nav_enabled;
-        let solver_center = *self.camera.origin;
+        let solver_center = WorldPos(*self.camera.origin);
         let mouse_abs = Some((
             self.input.mouse_position.x as i32,
             self.input.mouse_position.y as i32,

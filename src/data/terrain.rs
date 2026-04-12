@@ -27,7 +27,6 @@ pub enum Terrain {
 }
 
 impl Terrain {
-    #[allow(dead_code, clippy::match_same_arms)]
     /// Check whether `self` would connect to a group through a `terrain` edge.
     pub fn extends_group_of(self, terrain: Terrain) -> bool {
         use Terrain::{Empty, Lake, Missing, Rail, River, Station};
@@ -40,7 +39,6 @@ impl Terrain {
         }
     }
 
-    #[allow(clippy::match_same_arms)]
     pub fn connects_and_matches(self, other: Terrain) -> EdgeMatch {
         use EdgeMatch::{Illegal, Matching, Suboptimal};
         use Terrain::{Empty, Lake, Missing, Rail, River, Station};
@@ -84,7 +82,10 @@ impl From<&raw_data::GroupTypeId> for Terrain {
             2 => Terrain::Wheat,
             3 => Terrain::Rail,
             4 => Terrain::River,
-            other => panic!("Unexpected terrain type value {other}"),
+            other => {
+                log::warn!("Unexpected terrain type value {other}, defaulting to Empty");
+                Terrain::Empty
+            }
         }
     }
 }

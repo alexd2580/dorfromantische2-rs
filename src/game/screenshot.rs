@@ -1,49 +1,43 @@
-#![allow(dead_code)]
-
-use std::process::Command;
-
 use egui::ColorImage;
+use libwayshot::WayshotConnection;
+use niri_ipc::socket::Socket;
+use niri_ipc::{Request, Response};
 
-/// Find the output (monitor) that the Dorfromantik game window is on.
+/// Find the output (monitor) name that the Dorfromantik game window is on.
 fn find_game_output() -> Option<String> {
+    let mut socket = Socket::connect().ok()?;
+
     // Get windows list.
-    let win_output = Command::new("niri")
-        .args(["msg", "-j", "windows"])
-        .output()
-        .ok()?;
-    if !win_output.status.success() {
-        return None;
-    }
-    let windows: Vec<serde_json::Value> = serde_json::from_slice(&win_output.stdout).ok()?;
+    let reply = socket.send(Request::Windows).ok()?;
+    let windows = match reply {
+        Ok(Response::Windows(w)) => w,
+        _ => return None,
+    };
 
     // Find the Dorfromantik window and its workspace.
     let workspace_id = windows.iter().find_map(|w| {
-        let title = w.get("title")?.as_str()?;
-        let app_id = w.get("app_id").and_then(|a| a.as_str()).unwrap_or("");
+        let title = w.title.as_deref().unwrap_or("");
+        let app_id = w.app_id.as_deref().unwrap_or("");
         if title.contains("Dorfromantik")
             || app_id.contains("dorfromantik")
             || app_id.contains("1455840")
         {
-            w.get("workspace_id")?.as_u64()
+            w.workspace_id
         } else {
             None
         }
     })?;
 
     // Get workspaces to find the output name for this workspace.
-    let ws_output = Command::new("niri")
-        .args(["msg", "-j", "workspaces"])
-        .output()
-        .ok()?;
-    if !ws_output.status.success() {
-        return None;
-    }
-    let workspaces: Vec<serde_json::Value> = serde_json::from_slice(&ws_output.stdout).ok()?;
+    let reply = socket.send(Request::Workspaces).ok()?;
+    let workspaces = match reply {
+        Ok(Response::Workspaces(ws)) => ws,
+        _ => return None,
+    };
 
     workspaces.iter().find_map(|ws| {
-        let id = ws.get("id")?.as_u64()?;
-        if id == workspace_id {
-            ws.get("output")?.as_str().map(|s| s.to_string())
+        if ws.id == workspace_id {
+            ws.output.clone()
         } else {
             None
         }
@@ -53,29 +47,31 @@ fn find_game_output() -> Option<String> {
 /// Capture a screenshot of the Dorfromantik game window.
 /// Falls back to full screen if the game window can't be found.
 pub fn capture_screen() -> Option<ColorImage> {
-    let mut cmd = Command::new("grim");
-    cmd.args(["-t", "png"]);
+    let wayshot = WayshotConnection::new().ok()?;
 
-    if let Some(output_name) = find_game_output() {
-        cmd.args(["-o", &output_name]);
+    let img = if let Some(output_name) = find_game_output() {
+        // Find the matching output in wayshot's output list.
+        let output_info = wayshot
+            .get_all_outputs()
+            .iter()
+            .find(|o| o.name == output_name);
+        match output_info {
+            Some(info) => wayshot.screenshot_single_output(info, false).ok()?,
+            None => {
+                log::warn!(
+                    "Output '{}' not found in wayshot outputs, capturing all",
+                    output_name
+                );
+                wayshot.screenshot_all(false).ok()?
+            }
+        }
     } else {
-        eprintln!("Could not find Dorfromantik window, capturing full screen");
-    }
+        log::warn!("Could not find Dorfromantik window, capturing full screen");
+        wayshot.screenshot_all(false).ok()?
+    };
 
-    cmd.arg("-");
-
-    let output = cmd.output().ok()?;
-
-    if !output.status.success() {
-        eprintln!("grim failed: {}", String::from_utf8_lossy(&output.stderr));
-        return None;
-    }
-
-    let img = image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
-        .ok()?
-        .to_rgba8();
-
-    let size = [img.width() as usize, img.height() as usize];
-    let pixels = img.into_raw();
+    let rgba = img.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let pixels = rgba.into_raw();
     Some(ColorImage::from_rgba_unmultiplied(size, &pixels))
 }
