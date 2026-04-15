@@ -13,10 +13,16 @@ use crate::data::HexPos;
 use niri_ipc::{Action, Request, Response};
 
 use super::game_camera::GameCamera;
-use super::screenshot;
-use super::viewport_detect::{self, DetectResult, MapSilhouette};
-use crate::coords::WorldPos;
+use super::viewport_detect::MapSilhouette;
+use crate::coords::{CameraMode, UnityCameraState, WorldPos};
 use crate::map::Map;
+
+/// Path to the camera position file written by the hardpatched game.
+const CAMERA_POS_FILE: &str =
+    "/home/sascha/.local/share/Steam/steamapps/common/Dorfromantik/camera_pos.txt";
+/// Path to the file the solver writes to move the game camera.
+const CAMERA_SET_FILE: &str =
+    "/home/sascha/.local/share/Steam/steamapps/common/Dorfromantik/camera_set.txt";
 
 /// State for tracking viewport changes and triggering game navigation.
 pub struct GameNav {
@@ -27,27 +33,22 @@ pub struct GameNav {
     /// Estimated game viewport center (world coords).
     game_center: Option<WorldPos>,
     settle_time: Duration,
-    pub enabled: bool,
-    /// Whether periodic screenshot-based viewport detection is active.
-    pub detect_enabled: bool,
+    /// Camera coupling mode.
+    pub camera_mode: CameraMode,
     /// Solver's mouse position (absolute screen pixels) for restoration after drag.
     saved_mouse: Option<(i32, i32)>,
     /// Precomputed map silhouette for viewport detection (shared with bg thread).
     map_silhouette: Option<Arc<MapSilhouette>>,
-    /// Last time viewport detection was kicked off.
-    last_detect: Instant,
-    /// Interval between automatic viewport detections.
-    detect_interval: Duration,
-    /// Result from background detection thread.
-    detect_result: Arc<Mutex<Option<DetectResult>>>,
-    /// Whether a detection is currently running.
-    detect_running: Arc<Mutex<bool>>,
     /// Status message for the UI.
     pub detect_status: String,
     /// Pending map silhouette being built in background.
     pending_silhouette: Option<Arc<Mutex<Option<MapSilhouette>>>>,
     /// Game screen dimensions (width, height) from the last screenshot.
     pub screen_size: (u32, u32),
+    /// Last contents of camera_pos.txt to detect changes.
+    last_camera_file: String,
+    /// Last parsed Unity camera state.
+    last_unity_state: Option<UnityCameraState>,
 }
 
 impl Default for GameNav {
@@ -59,17 +60,14 @@ impl Default for GameNav {
             pending: false,
             game_center: None,
             settle_time: Duration::from_millis(500),
-            enabled: false,
-            detect_enabled: false,
+            camera_mode: CameraMode::Off,
             saved_mouse: None,
             map_silhouette: None,
-            last_detect: Instant::now(),
-            detect_interval: Duration::from_secs(5),
-            detect_result: Arc::new(Mutex::new(None)),
-            detect_running: Arc::new(Mutex::new(false)),
-            detect_status: "No map loaded".into(),
+            detect_status: "Off".into(),
             pending_silhouette: None,
             screen_size: (2560, 1440),
+            last_camera_file: String::new(),
+            last_unity_state: None,
         }
     }
 }
@@ -85,6 +83,11 @@ impl GameNav {
     ) -> bool {
         self.saved_mouse = mouse_abs;
 
+        if self.camera_mode != CameraMode::Off {
+            // Poll camera_pos.txt from the hardpatched game.
+            self.poll_camera_file();
+        }
+
         // Check for completed silhouette build.
         let sil_ready = self
             .pending_silhouette
@@ -92,44 +95,17 @@ impl GameNav {
             .and_then(|p| p.try_lock().ok().and_then(|mut g| g.take()));
         if let Some(sil) = sil_ready {
             self.map_silhouette = Some(Arc::new(sil));
-            self.detect_status = "Map loaded, waiting to detect...".into();
+            self.detect_status = "Map loaded".into();
             self.pending_silhouette = None;
         }
 
-        // Check for completed background detection.
-        if let Some(result) = self.detect_result.lock().unwrap().take() {
-            self.game_center = Some(result.center);
-            self.camera.look_at = result.center;
-            self.screen_size = result.screen_size;
-            self.detect_status = format!(
-                "Viewport: ({:.0}, {:.0})",
-                result.center.x(),
-                result.center.y()
-            );
-        }
-
-        // Kick off periodic detection in background (only when enabled).
-        let is_running = *self.detect_running.lock().unwrap();
-        if self.detect_enabled
-            && self.map_silhouette.is_some()
-            && self.last_detect.elapsed() >= self.detect_interval
-            && !is_running
-        {
-            self.last_detect = Instant::now();
-            self.detect_status = "Detecting...".into();
-            self.spawn_detect();
-        }
-
-        if !self.enabled {
-            return false;
-        }
-
-        let moved = (solver_center.0 - self.last_solver_center.0).length() > 1.0;
-        if moved {
-            self.last_solver_center = solver_center;
-            self.last_change = Instant::now();
-            self.pending = true;
-            return false;
+        // Duplex: when solver camera moves, tell the game to follow immediately.
+        if self.camera_mode == CameraMode::Duplex {
+            let moved = (solver_center.0 - self.last_solver_center.0).length() > 1.0;
+            if moved {
+                self.last_solver_center = solver_center;
+                self.write_camera_set(solver_center);
+            }
         }
 
         if !self.pending || self.last_change.elapsed() < self.settle_time || !mouse_idle {
@@ -138,50 +114,6 @@ impl GameNav {
 
         self.pending = false;
         self.navigate_to(solver_center)
-    }
-
-    fn spawn_detect(&self) {
-        let sil = match &self.map_silhouette {
-            Some(s) => Arc::clone(s),
-            None => return,
-        };
-        let mut cam = self.camera.clone();
-        cam.look_at = WorldPos::ZERO; // Unprojection must be origin-relative.
-        let result = Arc::clone(&self.detect_result);
-        let running = Arc::clone(&self.detect_running);
-
-        *running.lock().unwrap() = true;
-
-        std::thread::spawn(move || {
-            let center = std::panic::catch_unwind(|| {
-                (|| {
-                    let color_image = screenshot::capture_screen()?;
-                    let w = color_image.size[0] as u32;
-                    let h = color_image.size[1] as u32;
-                    let mut rgb = image::RgbImage::new(w, h);
-                    for y in 0..h {
-                        for x in 0..w {
-                            let c = color_image[(x as usize, y as usize)];
-                            rgb.put_pixel(x, y, image::Rgb([c.r(), c.g(), c.b()]));
-                        }
-                    }
-                    viewport_detect::detect_viewport(&rgb, &sil, &cam)
-                })()
-            });
-
-            match center {
-                Ok(Some(c)) => {
-                    *result.lock().unwrap() = Some(c);
-                }
-                Ok(None) => {
-                    log::warn!("GameNav: detection returned None");
-                }
-                Err(e) => {
-                    log::error!("GameNav: detection panicked: {:?}", e);
-                }
-            }
-            *running.lock().unwrap() = false;
-        });
     }
 
     fn navigate_to(&mut self, target_world: WorldPos) -> bool {
@@ -290,35 +222,57 @@ impl GameNav {
         self.pending_silhouette = Some(sil_result);
     }
 
-    /// Capture a screenshot and detect the game viewport position.
-    /// Returns the detected world center, or None.
-    pub fn detect_game_viewport(&mut self) -> Option<WorldPos> {
-        let sil = self.map_silhouette.as_ref()?;
-        let color_image = screenshot::capture_screen()?;
-        let w = color_image.size[0] as u32;
-        let h = color_image.size[1] as u32;
-        let mut rgb = image::RgbImage::new(w, h);
-        for y in 0..h {
-            for x in 0..w {
-                let c = color_image[(x as usize, y as usize)];
-                rgb.put_pixel(x, y, image::Rgb([c.r(), c.g(), c.b()]));
-            }
-        }
-        let mut cam = self.camera.clone();
-        cam.look_at = WorldPos::ZERO;
-        let result = viewport_detect::detect_viewport(&rgb, sil, &cam)?;
-        self.game_center = Some(result.center);
-        self.camera.look_at = result.center;
-        self.screen_size = result.screen_size;
-        Some(result.center)
-    }
-
     pub fn game_center(&self) -> Option<WorldPos> {
         self.game_center
     }
 
     pub fn set_game_center(&mut self, center: WorldPos) {
         self.game_center = Some(center);
+    }
+
+    /// Read camera_pos.txt and update camera state if changed.
+    fn poll_camera_file(&mut self) {
+        let contents = match std::fs::read_to_string(CAMERA_POS_FILE) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        if contents == self.last_camera_file {
+            return;
+        }
+        self.last_camera_file = contents.clone();
+
+        if let Some(state) = UnityCameraState::parse(&contents) {
+            // camera_pos.txt reports CameraParent position (ground look-at point).
+            // Unity coordinates are half our world coordinates (game hex spacing = 0.75, ours = 1.5).
+            let look_at = WorldPos::new(state.pos.x * 2.0, state.pos.z * 2.0);
+
+            // CameraParent eulerAngles.x is the pitch from horizontal.
+            let pitch = std::f32::consts::FRAC_PI_2 - state.pitch_deg.to_radians(); // from vertical
+            let yaw = state.yaw_deg.to_radians();
+            let fov_y = state.fov_deg.to_radians();
+
+            // anchor_z is CameraAnchor.localPosition.z (negative, e.g. -10 at default zoom).
+            // GameCamera.distance is a projection parameter: at anchor_z=-10, distance=96.
+            let distance = state.anchor_z.abs() * (96.0 / 10.0);
+
+            self.camera.look_at = look_at;
+            self.camera.distance = distance;
+            self.camera.pitch = pitch;
+            self.camera.yaw = yaw;
+            self.camera.fov_y = fov_y;
+            self.game_center = Some(look_at);
+            self.last_unity_state = Some(state);
+            self.detect_status = format!("Camera: ({:.0}, {:.0})", look_at.x(), look_at.y());
+        }
+    }
+
+    /// Write camera_set.txt to move the game's CameraParent to a world position.
+    /// Unity coordinates are half our world coordinates.
+    fn write_camera_set(&self, target: WorldPos) {
+        let line = format!("{:.4} 0.0 {:.4}", target.x() / 2.0, target.y() / 2.0);
+        if let Err(e) = std::fs::write(CAMERA_SET_FILE, line) {
+            log::warn!("Failed to write camera_set.txt: {e}");
+        }
     }
 }
 

@@ -133,3 +133,129 @@ impl Sub for PixelPos {
         Self(self.0 - rhs.0)
     }
 }
+
+// --- CameraMode ---
+
+/// How the solver's camera couples with the game's camera.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CameraMode {
+    /// No game camera coupling.
+    Off,
+    /// Read camera_pos.txt, render trapezoid on the map.
+    TrackGame,
+    /// Bidirectional: game camera tracks solver and vice versa.
+    Duplex,
+}
+
+// --- UnityCameraPos ---
+
+/// The 3D camera position in Unity world space.
+/// x = east/west, y = height above ground, z = north/south.
+/// Written by the hardpatched game to camera_pos.txt.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct UnityCameraPos {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+/// Full camera state read from camera_pos.txt.
+#[derive(Clone, Copy, Debug)]
+pub struct UnityCameraState {
+    pub pos: UnityCameraPos,
+    /// Pitch in degrees from horizontal (e.g. 33°).
+    pub pitch_deg: f32,
+    /// Yaw in degrees (0° = default, increases clockwise).
+    pub yaw_deg: f32,
+    /// Vertical field of view in degrees (e.g. 30°).
+    pub fov_deg: f32,
+    /// CameraAnchor local Z position (negative = zoom distance, default -10).
+    pub anchor_z: f32,
+}
+
+impl UnityCameraState {
+    /// Parse "x y z rotX rotY rotZ fov anchorZ" from camera_pos.txt.
+    pub fn parse(s: &str) -> Option<Self> {
+        let parts: Vec<f32> = s
+            .split_whitespace()
+            .filter_map(|p| p.parse().ok())
+            .collect();
+        if parts.len() < 7 {
+            return None;
+        }
+        Some(Self {
+            pos: UnityCameraPos {
+                x: parts[0],
+                y: parts[1],
+                z: parts[2],
+            },
+            pitch_deg: parts[3],
+            yaw_deg: parts[4],
+            fov_deg: parts[6],
+            anchor_z: if parts.len() >= 8 { parts[7] } else { -10.0 },
+        })
+    }
+
+    /// Compute the ground-plane look-at point in our 2D world coordinates.
+    /// Unity X = WorldPos.x, Unity Z = WorldPos.y.
+    /// The camera looks down at `pitch_deg` from horizontal, rotated by `yaw_deg`.
+    pub fn look_at(&self) -> WorldPos {
+        let pitch = self.pitch_deg.to_radians();
+        let yaw = self.yaw_deg.to_radians();
+
+        let sin_pitch = pitch.sin();
+        if sin_pitch.abs() < 0.001 {
+            return WorldPos::new(self.pos.x, self.pos.z);
+        }
+
+        let view_dist = self.pos.y / sin_pitch;
+        let horiz_dist = pitch.cos() * view_dist;
+
+        // Default look direction (yaw=0): camera is behind (negative Z) the target,
+        // looking forward (+Z). So the look-at point is AHEAD of the camera.
+        let look_x = self.pos.x + yaw.sin() * horiz_dist;
+        let look_z = self.pos.z + yaw.cos() * horiz_dist;
+
+        WorldPos::new(look_x, look_z)
+    }
+
+    /// The view distance along the camera's look axis (from camera to ground).
+    pub fn view_distance(&self) -> f32 {
+        let sin_pitch = self.pitch_deg.to_radians().sin();
+        if sin_pitch.abs() < 0.001 {
+            return self.pos.y;
+        }
+        self.pos.y / sin_pitch
+    }
+}
+
+impl UnityCameraPos {
+    /// Compute the Unity camera position for a given ground-plane target.
+    /// Inverse of `UnityCameraState::look_at`.
+    pub fn from_look_at(
+        target: WorldPos,
+        pitch_deg: f32,
+        yaw_deg: f32,
+        view_distance: f32,
+    ) -> Self {
+        let pitch = pitch_deg.to_radians();
+        let yaw = yaw_deg.to_radians();
+
+        let height = pitch.sin() * view_distance;
+        let horiz_dist = pitch.cos() * view_distance;
+
+        let cam_x = target.x() + yaw.sin() * horiz_dist;
+        let cam_z = target.y() + yaw.cos() * horiz_dist;
+
+        Self {
+            x: cam_x,
+            y: height,
+            z: cam_z,
+        }
+    }
+
+    /// Format as "x y z" for camera_set.txt.
+    pub fn to_set_string(self) -> String {
+        format!("{:.4} {:.4} {:.4}", self.x, self.y, self.z)
+    }
+}

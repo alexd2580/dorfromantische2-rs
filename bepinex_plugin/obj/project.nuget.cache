@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "dgSpecHash": "7y4uCmCO+Nw=",
+  "success": true,
+  "projectFilePath": "/home/sascha/code/hobby/dorfromantische2-rs/bepinex_plugin/Patcher.csproj",
+  "expectedPackageFiles": [
+    "/home/sascha/.cache/NuGetPackages/mono.cecil/0.11.6/mono.cecil.0.11.6.nupkg.sha512",
+    "/home/sascha/.cache/NuGetPackages/microsoft.netcore.app.ref/8.0.25/microsoft.netcore.app.ref.8.0.25.nupkg.sha512",
+    "/home/sascha/.cache/NuGetPackages/microsoft.aspnetcore.app.ref/8.0.25/microsoft.aspnetcore.app.ref.8.0.25.nupkg.sha512",
+    "/home/sascha/.cache/NuGetPackages/microsoft.netcore.app.host.linux-x64/8.0.25/microsoft.netcore.app.host.linux-x64.8.0.25.nupkg.sha512"
+  ],
+  "logs": []
+}

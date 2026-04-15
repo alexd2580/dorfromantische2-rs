@@ -9,6 +9,8 @@ pub enum TooltipMode {
     Chance,
 }
 
+pub use crate::coords::CameraMode;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuestDisplay {
     None,
@@ -53,8 +55,7 @@ pub struct UiState {
     pub sidebar_expanded: bool,
     /// The currently focused/highlighted placement position (from clicking a row).
     pub focused_placement: Option<HexPos>,
-    pub viewport_detect_enabled: bool,
-    pub game_nav_enabled: bool,
+    pub camera_mode: CameraMode,
 }
 
 impl Default for UiState {
@@ -74,8 +75,7 @@ impl Default for UiState {
             sidebar_expanded: true,
             focused_placement: None,
             focused_group: None,
-            viewport_detect_enabled: false,
-            game_nav_enabled: false,
+            camera_mode: CameraMode::Off,
         }
     }
 }

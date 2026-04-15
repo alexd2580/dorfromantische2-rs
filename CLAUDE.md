@@ -78,6 +78,7 @@ Linux/Wayland only. Game integration uses:
 - `enigo` for mouse input simulation
 - `niri-ipc` for window management (niri compositor)
 - `opencv` for template matching in viewport detection
+- Hardpatched `Assembly-CSharp.dll` exports camera position to `camera_pos.txt` (see `bepinex_plugin/README.md`)
 
 **Savegame locations:**
 - Active (Steam/Proton): `~/.local/share/Steam/steamapps/compatdata/1455840/pfx/drive_c/users/steamuser/AppData/LocalLow/Toukana Interactive/Dorfromantik/Saves/SaveGame_Classic_2023-02-05-12-06-16.sav`

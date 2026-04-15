@@ -34,6 +34,8 @@ fn run(
     mut ui: EguiIntegration,
     mut app: App,
 ) {
+    let mut last_left_click: Option<std::time::Instant> = None;
+
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
 
@@ -53,7 +55,28 @@ fn run(
                     WindowEvent::MouseInput { button, state, .. } => {
                         match (button, state) {
                             (MouseButton::Left, ElementState::Pressed) => {
-                                app.input.grab_move = true;
+                                let now = std::time::Instant::now();
+                                let is_double = last_left_click
+                                    .map(|t| now.duration_since(t).as_millis() < 300)
+                                    .unwrap_or(false);
+                                last_left_click = Some(now);
+
+                                if is_double
+                                    && app.visible_rect.contains(egui::Pos2::new(
+                                        app.input.mouse_position.x,
+                                        app.input.mouse_position.y,
+                                    ))
+                                {
+                                    let pixel = crate::coords::PixelPos::new(
+                                        app.input.mouse_position.x,
+                                        app.input.mouse_position.y,
+                                    );
+                                    let world = app.camera.pixel_to_world(pixel);
+                                    app.camera.goto_world(world);
+                                    last_left_click = None; // prevent triple-click
+                                } else {
+                                    app.input.grab_move = true;
+                                }
                             }
                             (MouseButton::Left, ElementState::Released) => {
                                 app.input.grab_move = false;

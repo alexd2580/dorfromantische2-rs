@@ -85,11 +85,12 @@ impl PlacementScore {
         let fit_key = std::cmp::Reverse((self.fit_chance * 1_000_000.0) as u32);
         (
             fit_key,
-            self.matching_edges,
+            // When fit% is equal, prefer lower difficulty (less constrained).
             std::cmp::Reverse(self.connection_difficulty),
+            self.matching_edges,
             std::cmp::Reverse(self.crowding),
             self.neighbor_bonus,
-            // Use the following to prevent duplicate removal.
+            // Tiebreak by position to prevent duplicate removal.
             self.pos.x(),
             self.pos.y(),
         )

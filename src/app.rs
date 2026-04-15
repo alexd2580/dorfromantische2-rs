@@ -54,7 +54,7 @@ pub struct App {
     pub visible_rect: egui::Rect,
 }
 
-use crate::coords::{PixelPos, WorldPos};
+use crate::coords::PixelPos;
 use crate::hex::{self, COS_30};
 
 impl App {
@@ -257,12 +257,14 @@ impl App {
     pub fn tick(&mut self, gpu: &Gpu) {
         self.camera.tick();
 
-        // Game navigation: sync game viewport with solver viewport.
-        // Nav sync requires detection to be active.
-        self.game_nav.detect_enabled =
-            self.ui_state.viewport_detect_enabled || self.ui_state.game_nav_enabled;
-        self.game_nav.enabled = self.ui_state.game_nav_enabled;
-        let solver_center = WorldPos(*self.camera.origin);
+        // Game camera coupling.
+        self.game_nav.camera_mode = self.ui_state.camera_mode;
+        // Use the center of the visible map area, not the raw camera origin.
+        let visible_center = crate::coords::PixelPos::new(
+            (self.visible_rect.min.x + self.visible_rect.max.x) / 2.0,
+            (self.visible_rect.min.y + self.visible_rect.max.y) / 2.0,
+        );
+        let solver_center = self.camera.pixel_to_world(visible_center);
         let mouse_abs = Some((
             self.input.mouse_position.x as i32,
             self.input.mouse_position.y as i32,

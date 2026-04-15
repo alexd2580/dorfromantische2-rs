@@ -1,0 +1,380 @@
+// Patches Assembly-CSharp.dll to inject camera position export.
+// Uses ONLY the game's own type references (no .NET 8 types).
+// Generates all IL inline — no external DLL needed.
+//
+// Usage: dotnet run --project Patcher.csproj [path-to-Managed-folder]
+
+using Mono.Cecil;
+using Mono.Cecil.Cil;
+using System;
+using System.IO;
+using System.Linq;
+
+class Patcher
+{
+    static void Main(string[] args)
+    {
+        var managedDir = args.Length > 0 ? args[0] :
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".local/share/Steam/steamapps/common/Dorfromantik/Dorfromantik_Data/Managed"
+            );
+
+        var asmPath = Path.Combine(managedDir, "Assembly-CSharp.dll");
+        var backupPath = asmPath + ".orig";
+        if (!File.Exists(asmPath))
+        {
+            Console.Error.WriteLine($"Not found: {asmPath}");
+            return;
+        }
+
+        if (!File.Exists(backupPath))
+        {
+            File.Copy(asmPath, backupPath);
+            Console.WriteLine($"Backed up: {backupPath}");
+        }
+
+        Console.WriteLine($"Patching: {asmPath}");
+
+        var resolver = new DefaultAssemblyResolver();
+        resolver.AddSearchDirectory(managedDir);
+
+        using var asm = AssemblyDefinition.ReadAssembly(asmPath,
+            new ReaderParameters { AssemblyResolver = resolver, ReadWrite = true });
+
+        var module = asm.MainModule;
+
+        if (module.Types.Any(t => t.Name == "CamExportPatch"))
+        {
+            Console.WriteLine("Already patched! To re-patch, restore from .orig first.");
+            return;
+        }
+
+        // Use module.TypeSystem for primitives — these reference mscorlib, not .NET 8
+        var voidType = module.TypeSystem.Void;
+        var intType = module.TypeSystem.Int32;
+        var stringType = module.TypeSystem.String;
+        var objectType = module.TypeSystem.Object;
+        var floatType = module.TypeSystem.Single;
+
+        // Resolve game assemblies
+        var unityCore = resolver.Resolve(new AssemblyNameReference("UnityEngine.CoreModule", new Version()));
+        var mscorlib = resolver.Resolve(new AssemblyNameReference("mscorlib", new Version()));
+
+        var cameraType = unityCore.MainModule.Types.First(t => t.FullName == "UnityEngine.Camera");
+        var transformType = unityCore.MainModule.Types.First(t => t.FullName == "UnityEngine.Transform");
+        var vector3Type = unityCore.MainModule.Types.First(t => t.FullName == "UnityEngine.Vector3");
+        var componentType = unityCore.MainModule.Types.First(t => t.FullName == "UnityEngine.Component");
+
+        var getMain = module.ImportReference(cameraType.Properties.First(p => p.Name == "main").GetMethod);
+        var getTransform = module.ImportReference(componentType.Properties.First(p => p.Name == "transform").GetMethod);
+        var getPosition = module.ImportReference(transformType.Properties.First(p => p.Name == "position").GetMethod);
+        var getEulerAngles = module.ImportReference(transformType.Properties.First(p => p.Name == "eulerAngles").GetMethod);
+        var getFieldOfView = module.ImportReference(cameraType.Properties.First(p => p.Name == "fieldOfView").GetMethod);
+
+        var v3TypeRef = module.ImportReference(vector3Type);
+        var v3x = module.ImportReference(vector3Type.Fields.First(f => f.Name == "x"));
+        var v3y = module.ImportReference(vector3Type.Fields.First(f => f.Name == "y"));
+        var v3z = module.ImportReference(vector3Type.Fields.First(f => f.Name == "z"));
+
+        var fileType = mscorlib.MainModule.Types.First(t => t.FullName == "System.IO.File");
+        var writeAllText = module.ImportReference(
+            fileType.Methods.First(m => m.Name == "WriteAllText" && m.Parameters.Count == 2));
+        var readAllText = module.ImportReference(
+            fileType.Methods.First(m => m.Name == "ReadAllText" && m.Parameters.Count == 1));
+        var fileDelete = module.ImportReference(
+            fileType.Methods.First(m => m.Name == "Delete" && m.Parameters.Count == 1));
+
+        var stringFormatArr = module.ImportReference(
+            mscorlib.MainModule.Types.First(t => t.FullName == "System.String")
+                .Methods.First(m => m.Name == "Format" && m.Parameters.Count == 2
+                    && m.Parameters[1].ParameterType.IsArray));
+
+        var exceptionType = module.ImportReference(
+            mscorlib.MainModule.Types.First(t => t.FullName == "System.Exception"));
+        var fileNotFoundType = module.ImportReference(
+            mscorlib.MainModule.Types.First(t => t.FullName == "System.IO.FileNotFoundException"));
+
+        // String.Trim() and String.Split(char)
+        var stringTrim = module.ImportReference(
+            mscorlib.MainModule.Types.First(t => t.FullName == "System.String")
+                .Methods.First(m => m.Name == "Trim" && m.Parameters.Count == 0));
+        var stringSplit = module.ImportReference(
+            mscorlib.MainModule.Types.First(t => t.FullName == "System.String")
+                .Methods.First(m => m.Name == "Split" && m.Parameters.Count == 1
+                    && m.Parameters[0].ParameterType.IsArray
+                    && m.Parameters[0].ParameterType.GetElementType().FullName == "System.Char"));
+
+        // Single.Parse(string)
+        var singleParse = module.ImportReference(
+            mscorlib.MainModule.Types.First(t => t.FullName == "System.Single")
+                .Methods.First(m => m.Name == "Parse" && m.Parameters.Count == 1));
+
+        // Transform.set_position(Vector3)
+        var setPosition = module.ImportReference(
+            transformType.Properties.First(p => p.Name == "position").SetMethod);
+
+        // Vector3 constructor (float, float, float)
+        var v3Ctor = module.ImportReference(
+            vector3Type.Methods.First(m => m.IsConstructor && m.Parameters.Count == 3));
+
+        // Create CamExportPatch type
+        var patchType = new TypeDefinition("", "CamExportPatch",
+            TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed,
+            objectType);
+        module.Types.Add(patchType);
+
+        var counterField = new FieldDefinition("frameCounter",
+            FieldAttributes.Private | FieldAttributes.Static, intType);
+        patchType.Fields.Add(counterField);
+
+        // Create Export()
+        var exportMethod = new MethodDefinition("Export",
+            MethodAttributes.Public | MethodAttributes.Static, voidType);
+        patchType.Methods.Add(exportMethod);
+        exportMethod.Body.InitLocals = true;
+
+        var posLocal = new VariableDefinition(v3TypeRef);
+        var rotLocal = new VariableDefinition(v3TypeRef);
+        var fovLocal = new VariableDefinition(floatType);
+        var camLocal = new VariableDefinition(module.ImportReference(cameraType));
+        var transformLocal = new VariableDefinition(module.ImportReference(transformType));
+        var contentLocal = new VariableDefinition(stringType);
+
+        exportMethod.Body.Variables.Add(posLocal);       // 0
+        exportMethod.Body.Variables.Add(rotLocal);       // 1
+        exportMethod.Body.Variables.Add(fovLocal);       // 2
+        exportMethod.Body.Variables.Add(camLocal);       // 3
+        exportMethod.Body.Variables.Add(transformLocal);  // 4
+        exportMethod.Body.Variables.Add(contentLocal);    // 5
+
+        var il = exportMethod.Body.GetILProcessor();
+        var retInstr = il.Create(OpCodes.Ret);
+
+        // frameCounter = (frameCounter + 1); if (frameCounter % 10 != 0) return;
+        il.Append(il.Create(OpCodes.Ldsfld, counterField));
+        il.Append(il.Create(OpCodes.Ldc_I4_1));
+        il.Append(il.Create(OpCodes.Add));
+        il.Append(il.Create(OpCodes.Dup));
+        il.Append(il.Create(OpCodes.Stsfld, counterField));
+        il.Append(il.Create(OpCodes.Ldc_I4, 10));
+        il.Append(il.Create(OpCodes.Rem));
+        il.Append(il.Create(OpCodes.Brtrue, retInstr));
+
+        // cam = Camera.main; if (cam == null) return;
+        il.Append(il.Create(OpCodes.Call, getMain));
+        il.Append(il.Create(OpCodes.Stloc_3));
+        il.Append(il.Create(OpCodes.Ldloc_3));
+        il.Append(il.Create(OpCodes.Brfalse, retInstr));
+
+        // transform = cam.transform
+        il.Append(il.Create(OpCodes.Ldloc_3));
+        il.Append(il.Create(OpCodes.Callvirt, getTransform));
+        il.Append(il.Create(OpCodes.Stloc, transformLocal));
+
+        // pos = transform.position
+        il.Append(il.Create(OpCodes.Ldloc, transformLocal));
+        il.Append(il.Create(OpCodes.Callvirt, getPosition));
+        il.Append(il.Create(OpCodes.Stloc_0));
+
+        // rot = transform.eulerAngles
+        il.Append(il.Create(OpCodes.Ldloc, transformLocal));
+        il.Append(il.Create(OpCodes.Callvirt, getEulerAngles));
+        il.Append(il.Create(OpCodes.Stloc_1));
+
+        // fov = cam.fieldOfView
+        il.Append(il.Create(OpCodes.Ldloc_3));
+        il.Append(il.Create(OpCodes.Callvirt, getFieldOfView));
+        il.Append(il.Create(OpCodes.Stloc_2));
+
+        // String.Format("{0:F4} {1:F4} {2:F4} {3:F4} {4:F4} {5:F4} {6:F4}", new object[7]{...})
+        il.Append(il.Create(OpCodes.Ldstr, "{0:F4} {1:F4} {2:F4} {3:F4} {4:F4} {5:F4} {6:F4}"));
+        il.Append(il.Create(OpCodes.Ldc_I4_7));
+        il.Append(il.Create(OpCodes.Newarr, objectType));
+
+        void EmitArrayStore(int index, VariableDefinition vecLocal, FieldReference field)
+        {
+            il.Append(il.Create(OpCodes.Dup));
+            il.Append(il.Create(OpCodes.Ldc_I4, index));
+            il.Append(il.Create(OpCodes.Ldloca_S, vecLocal));
+            il.Append(il.Create(OpCodes.Ldfld, field));
+            il.Append(il.Create(OpCodes.Box, floatType));
+            il.Append(il.Create(OpCodes.Stelem_Ref));
+        }
+
+        EmitArrayStore(0, posLocal, v3x);
+        EmitArrayStore(1, posLocal, v3y);
+        EmitArrayStore(2, posLocal, v3z);
+        EmitArrayStore(3, rotLocal, v3x);
+        EmitArrayStore(4, rotLocal, v3y);
+        EmitArrayStore(5, rotLocal, v3z);
+
+        // array[6] = fov (boxed)
+        il.Append(il.Create(OpCodes.Dup));
+        il.Append(il.Create(OpCodes.Ldc_I4_6));
+        il.Append(il.Create(OpCodes.Ldloc_2));
+        il.Append(il.Create(OpCodes.Box, floatType));
+        il.Append(il.Create(OpCodes.Stelem_Ref));
+
+        il.Append(il.Create(OpCodes.Call, stringFormatArr));
+        il.Append(il.Create(OpCodes.Stloc, contentLocal));
+
+        // try { File.WriteAllText("camera_pos.txt", content); } catch {}
+        var tryStart = il.Create(OpCodes.Ldstr, "camera_pos.txt");
+        il.Append(tryStart);
+        il.Append(il.Create(OpCodes.Ldloc, contentLocal));
+        il.Append(il.Create(OpCodes.Call, writeAllText));
+        var leaveTarget = il.Create(OpCodes.Nop);
+        il.Append(il.Create(OpCodes.Leave_S, leaveTarget));
+
+        var catchStart = il.Create(OpCodes.Pop);
+        il.Append(catchStart);
+        il.Append(il.Create(OpCodes.Leave_S, leaveTarget));
+
+        il.Append(leaveTarget);
+
+        exportMethod.Body.ExceptionHandlers.Add(new ExceptionHandler(ExceptionHandlerType.Catch)
+        {
+            TryStart = tryStart,
+            TryEnd = catchStart,
+            HandlerStart = catchStart,
+            HandlerEnd = leaveTarget,
+            CatchType = exceptionType,
+        });
+
+        // === IMPORT: try { read camera_set.txt, parse, set position, delete } catch(FileNotFound){} catch{}
+        // Additional locals
+        var importLineLocal = new VariableDefinition(stringType);
+        var partsLocal = new VariableDefinition(new ArrayType(stringType));
+        var importXLocal = new VariableDefinition(floatType);
+        var importZLocal = new VariableDefinition(floatType);
+        var parentLocal = new VariableDefinition(module.ImportReference(transformType));
+        var grandParentLocal = new VariableDefinition(module.ImportReference(transformType));
+        var newPosLocal = new VariableDefinition(v3TypeRef);
+        exportMethod.Body.Variables.Add(importLineLocal);   // 6
+        exportMethod.Body.Variables.Add(partsLocal);        // 7
+        exportMethod.Body.Variables.Add(importXLocal);      // 8
+        exportMethod.Body.Variables.Add(importZLocal);      // 9
+        exportMethod.Body.Variables.Add(parentLocal);       // 10
+        exportMethod.Body.Variables.Add(grandParentLocal);  // 11
+        exportMethod.Body.Variables.Add(newPosLocal);       // 12
+
+        var importLeave = il.Create(OpCodes.Nop);
+
+        // try {
+        //   line = File.ReadAllText("camera_set.txt").Trim();
+        var importTryStart = il.Create(OpCodes.Ldstr, "camera_set.txt");
+        il.Append(importTryStart);
+        il.Append(il.Create(OpCodes.Call, readAllText));
+        il.Append(il.Create(OpCodes.Callvirt, stringTrim));
+        il.Append(il.Create(OpCodes.Stloc, importLineLocal));
+
+        //   File.Delete("camera_set.txt");
+        il.Append(il.Create(OpCodes.Ldstr, "camera_set.txt"));
+        il.Append(il.Create(OpCodes.Call, fileDelete));
+
+        //   parts = line.Split(new char[]{' '});
+        il.Append(il.Create(OpCodes.Ldloc, importLineLocal));
+        il.Append(il.Create(OpCodes.Ldc_I4_1));
+        il.Append(il.Create(OpCodes.Newarr, module.TypeSystem.Char));
+        il.Append(il.Create(OpCodes.Dup));
+        il.Append(il.Create(OpCodes.Ldc_I4_0));
+        il.Append(il.Create(OpCodes.Ldc_I4, (int)' '));
+        il.Append(il.Create(OpCodes.Stelem_I2));
+        il.Append(il.Create(OpCodes.Callvirt, stringSplit));
+        il.Append(il.Create(OpCodes.Stloc, partsLocal));
+
+        //   if (parts.Length < 3) leave;
+        il.Append(il.Create(OpCodes.Ldloc, partsLocal));
+        il.Append(il.Create(OpCodes.Ldlen));
+        il.Append(il.Create(OpCodes.Ldc_I4_3));
+        il.Append(il.Create(OpCodes.Blt, importLeave));
+
+        //   x = float.Parse(parts[0]);
+        il.Append(il.Create(OpCodes.Ldloc, partsLocal));
+        il.Append(il.Create(OpCodes.Ldc_I4_0));
+        il.Append(il.Create(OpCodes.Ldelem_Ref));
+        il.Append(il.Create(OpCodes.Call, singleParse));
+        il.Append(il.Create(OpCodes.Stloc, importXLocal));
+
+        //   z = float.Parse(parts[2]);
+        il.Append(il.Create(OpCodes.Ldloc, partsLocal));
+        il.Append(il.Create(OpCodes.Ldc_I4_2));
+        il.Append(il.Create(OpCodes.Ldelem_Ref));
+        il.Append(il.Create(OpCodes.Call, singleParse));
+        il.Append(il.Create(OpCodes.Stloc, importZLocal));
+
+        //   parent = cam.transform.parent;
+        il.Append(il.Create(OpCodes.Ldloc_3)); // cam
+        il.Append(il.Create(OpCodes.Callvirt, getTransform));
+        var getParent = module.ImportReference(
+            transformType.Properties.First(p => p.Name == "parent").GetMethod);
+        il.Append(il.Create(OpCodes.Callvirt, getParent));
+        il.Append(il.Create(OpCodes.Stloc, parentLocal));
+
+        //   if (parent == null) leave;
+        il.Append(il.Create(OpCodes.Ldloc, parentLocal));
+        il.Append(il.Create(OpCodes.Brfalse, importLeave));
+
+        //   grandParent = parent.parent;
+        il.Append(il.Create(OpCodes.Ldloc, parentLocal));
+        il.Append(il.Create(OpCodes.Callvirt, getParent));
+        il.Append(il.Create(OpCodes.Stloc, grandParentLocal));
+
+        //   if (grandParent == null) leave;
+        il.Append(il.Create(OpCodes.Ldloc, grandParentLocal));
+        il.Append(il.Create(OpCodes.Brfalse, importLeave));
+
+        //   grandParent.position = new Vector3(x, 0, z);
+        il.Append(il.Create(OpCodes.Ldloc, grandParentLocal));
+        il.Append(il.Create(OpCodes.Ldloca_S, newPosLocal));
+        il.Append(il.Create(OpCodes.Ldloc, importXLocal));
+        il.Append(il.Create(OpCodes.Ldc_R4, 0.0f));
+        il.Append(il.Create(OpCodes.Ldloc, importZLocal));
+        il.Append(il.Create(OpCodes.Call, v3Ctor));
+        il.Append(il.Create(OpCodes.Ldloc, newPosLocal));
+        il.Append(il.Create(OpCodes.Callvirt, setPosition));
+
+        il.Append(il.Create(OpCodes.Leave_S, importLeave));
+        // } catch (FileNotFoundException) { /* ignore */ }
+        var importCatchFnf = il.Create(OpCodes.Pop);
+        il.Append(importCatchFnf);
+        il.Append(il.Create(OpCodes.Leave_S, importLeave));
+        // catch (Exception) { /* ignore */ }
+        var importCatchAll = il.Create(OpCodes.Pop);
+        il.Append(importCatchAll);
+        il.Append(il.Create(OpCodes.Leave_S, importLeave));
+
+        il.Append(importLeave);
+        il.Append(retInstr);
+
+        exportMethod.Body.ExceptionHandlers.Add(new ExceptionHandler(ExceptionHandlerType.Catch)
+        {
+            TryStart = importTryStart,
+            TryEnd = importCatchFnf,
+            HandlerStart = importCatchFnf,
+            HandlerEnd = importCatchAll,
+            CatchType = fileNotFoundType,
+        });
+        exportMethod.Body.ExceptionHandlers.Add(new ExceptionHandler(ExceptionHandlerType.Catch)
+        {
+            TryStart = importTryStart,
+            TryEnd = importCatchFnf,
+            HandlerStart = importCatchAll,
+            HandlerEnd = importLeave,
+            CatchType = exceptionType,
+        });
+
+        // Inject call into CameraMovement.LateUpdate
+        var cameraMovement = module.Types.FirstOrDefault(t => t.Name == "CameraMovement");
+        if (cameraMovement == null) { Console.Error.WriteLine("CameraMovement not found!"); return; }
+        var lateUpdate = cameraMovement.Methods.FirstOrDefault(m => m.Name == "LateUpdate");
+        if (lateUpdate == null) { Console.Error.WriteLine("LateUpdate not found!"); return; }
+
+        var luIl = lateUpdate.Body.GetILProcessor();
+        luIl.InsertBefore(lateUpdate.Body.Instructions[0], luIl.Create(OpCodes.Call, exportMethod));
+
+        asm.Write();
+        Console.WriteLine("Patched successfully!");
+    }
+}

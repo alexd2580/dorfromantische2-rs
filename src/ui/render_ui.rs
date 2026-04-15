@@ -23,8 +23,12 @@ fn render_top_panel(ui_state: &mut UiState, file_watcher: &mut FileWatcher, ctx:
             }
             ui.toggle_value(&mut ui_state.sidebar_expanded, "Visual settings");
             ui.toggle_value(&mut ui_state.show_tile_frequencies, "Tile frequencies");
-            ui.toggle_value(&mut ui_state.viewport_detect_enabled, "Detect viewport");
-            ui.toggle_value(&mut ui_state.game_nav_enabled, "Nav sync");
+            ui.separator();
+            ui.label("Camera:");
+            use super::ui_state::CameraMode;
+            ui.selectable_value(&mut ui_state.camera_mode, CameraMode::Off, "Off");
+            ui.selectable_value(&mut ui_state.camera_mode, CameraMode::TrackGame, "Track");
+            ui.selectable_value(&mut ui_state.camera_mode, CameraMode::Duplex, "Duplex");
         });
     });
 }
@@ -1149,7 +1153,12 @@ pub fn render_ui(
     if *pending_zoom_fit > 0 {
         *pending_zoom_fit -= 1;
         if *pending_zoom_fit == 0 {
-            camera.zoom_fit(&data.map);
+            // Zoom to best placement if available, otherwise fit the whole map.
+            if let Some((_, score)) = data.best_placements.iter_all().first() {
+                camera.goto(score.pos);
+            } else {
+                camera.zoom_fit(&data.map);
+            }
         }
     }
     render_tooltip(data, input, ui_state, ctx);
@@ -1202,7 +1211,7 @@ pub fn render_ui(
     }
     render_tile_frequencies(data, ui_state, ctx);
     render_next_tile(data, ctx);
-    render_game_viewport_quad(game_nav, camera, ctx, visible_rect);
+    render_game_camera_marker(game_nav, camera, ctx, visible_rect);
     visible_rect
 }
 
@@ -1363,51 +1372,28 @@ fn render_placement_chance(
 }
 
 /// Render the estimated game viewport as a quad on the solver map.
-fn render_game_viewport_quad(
+fn render_game_camera_marker(
     game_nav: &crate::game::game_nav::GameNav,
     camera: &Camera,
     ctx: &egui::Context,
     visible_rect: egui::Rect,
 ) {
-    let _game_center = match game_nav.game_center() {
+    let center = match game_nav.game_center() {
         Some(c) => c,
         None => return,
     };
 
-    // Compute the 4 corners of the game viewport in world coordinates.
-    let gcam = &game_nav.camera;
-    let corners_screen = [
-        crate::coords::ScreenPos::new(0.0, 0.0),
-        crate::coords::ScreenPos::new(1.0, 0.0),
-        crate::coords::ScreenPos::new(1.0, 1.0),
-        crate::coords::ScreenPos::new(0.0, 1.0),
-    ];
-    let corners_world: Vec<crate::coords::WorldPos> = corners_screen
-        .iter()
-        .map(|s| gcam.screen_to_world(*s, game_nav.screen_size))
-        .collect();
-
-    // Project to solver pixel coordinates.
-    let corners_pixel: Vec<Pos2> = corners_world
-        .iter()
-        .map(|w| {
-            let px = camera.world_to_pixel(*w);
-            Pos2::new(px.x(), px.y())
-        })
-        .collect();
-
+    let px = camera.world_to_pixel(center);
     let mut painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Middle,
-        egui::Id::new("game_viewport_quad"),
+        egui::Id::new("game_camera_marker"),
     ));
     painter.set_clip_rect(visible_rect);
 
-    // Draw the quad as 4 line segments.
-    let quad_color = Color32::from_rgba_premultiplied(255, 255, 0, 180);
-    for i in 0..4 {
-        painter.add(egui::Shape::line_segment(
-            [corners_pixel[i], corners_pixel[(i + 1) % 4]],
-            egui::Stroke::new(2.0, quad_color),
-        ));
-    }
+    let color = Color32::from_rgba_premultiplied(255, 255, 0, 180);
+    painter.circle_stroke(
+        Pos2::new(px.x(), px.y()),
+        20.0,
+        egui::Stroke::new(3.0, color),
+    );
 }

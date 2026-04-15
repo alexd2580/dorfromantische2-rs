@@ -1,0 +1,11 @@
+/home/sascha/code/hobby/dorfromantische2-rs/bepinex_plugin/obj/Release/netstandard2.0/CamExportPatch.csproj.AssemblyReference.cache
+/home/sascha/code/hobby/dorfromantische2-rs/bepinex_plugin/obj/Release/netstandard2.0/CamExportPatch.GeneratedMSBuildEditorConfig.editorconfig
+/home/sascha/code/hobby/dorfromantische2-rs/bepinex_plugin/obj/Release/netstandard2.0/CamExportPatch.AssemblyInfoInputs.cache
+/home/sascha/code/hobby/dorfromantische2-rs/bepinex_plugin/obj/Release/netstandard2.0/CamExportPatch.AssemblyInfo.cs
+/home/sascha/code/hobby/dorfromantische2-rs/bepinex_plugin/obj/Release/netstandard2.0/CamExportPatch.csproj.CoreCompileInputs.cache
+/home/sascha/code/hobby/dorfromantische2-rs/bepinex_plugin/obj/Release/netstandard2.0/CamExportPatch.sourcelink.json
+/home/sascha/code/hobby/dorfromantische2-rs/bepinex_plugin/bin/Release/netstandard2.0/CamExportPatch.deps.json
+/home/sascha/code/hobby/dorfromantische2-rs/bepinex_plugin/bin/Release/netstandard2.0/CamExportPatch.dll
+/home/sascha/code/hobby/dorfromantische2-rs/bepinex_plugin/bin/Release/netstandard2.0/CamExportPatch.pdb
+/home/sascha/code/hobby/dorfromantische2-rs/bepinex_plugin/obj/Release/netstandard2.0/CamExportPatch.dll
+/home/sascha/code/hobby/dorfromantische2-rs/bepinex_plugin/obj/Release/netstandard2.0/CamExportPatch.pdb
